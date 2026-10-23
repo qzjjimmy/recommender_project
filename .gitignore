@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# 运行产物（体积大、可重新生成）
+data/processed/*.csv
+data/processed/*.json
+data/generated/*.csv
+models/*
+!models/.gitkeep
+outputs/*
+!outputs/.gitkeep
+multimodal_ai_project1/outputs/*
+!multimodal_ai_project1/outputs/.gitkeep
+
+# 应用层本地数据：账号、反馈与会话密钥，绝不提交
+data/app_users.db
+data/app_feedback.db
+data/.secret_key
+data/.llm_key
+
+# 课程材料和实验报告（仅保留可公开的技术实践指南）
+docs/course/
+docs/presentations/
+docs/reports/
+docs/diagrams/
+
+# 其它
+.DS_Store
+Thumbs.db
+*.log

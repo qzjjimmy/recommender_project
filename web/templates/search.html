@@ -1,0 +1,1242 @@
+{% extends "layout.html" %}
+{% block title %}智能推荐 · 推荐系统实践{% endblock %}
+{% block style %}
+  /* ---------- 两种输入方式：并排的面板，中间一条发丝线分开 ---------- */
+  .methods { display: grid; grid-template-columns: 1.12fr 1fr; gap: 0; }
+  @media (max-width: 780px) { .methods { grid-template-columns: 1fr; } }
+  .method { padding: 2px 26px 2px 0; }
+  .method + .method { padding: 2px 0 2px 26px; border-left: 1px solid var(--line); }
+  @media (max-width: 780px) {
+    .method { padding: 0 0 22px; }
+    .method + .method { padding: 22px 0 0; border-left: 0; border-top: 1px solid var(--line); }
+  }
+  .method-head {
+    display: flex; align-items: center; gap: 10px; font-size: 15px;
+    font-weight: 600; color: var(--ink); margin-bottom: 14px; letter-spacing: -.012em;
+  }
+  .badge {
+    width: 30px; height: 30px; flex: 0 0 auto; border-radius: 10px;
+    display: grid; place-items: center; color: var(--ink-soft);
+    background: var(--card-sunken); border: 1px solid var(--line);
+  }
+  .method-voice .badge { background: var(--accent-soft); color: var(--accent-deep); border-color: transparent; }
+  .searchbar { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+  .searchbar .field { flex: 1 1 180px; min-width: 0; }
+  .searchbar input { width: 100%; }
+
+  /* 语音按钮是个胶囊形次级按钮；录音中才切到暖红并轻微呼吸 */
+  .mic-big {
+    width: 100%; padding: 14px 20px; font-size: 15px; border-radius: var(--r-pill);
+    background: var(--card-sunken); color: var(--ink); border-color: var(--line);
+    box-shadow: none; display: flex; align-items: center; justify-content: center; gap: 9px;
+  }
+  .mic-big:hover { background: var(--card-hover); border-color: var(--ink-faint); }
+  .mic-big.on {
+    background: var(--bad-soft); color: var(--bad); border-color: transparent;
+    animation: mic-breathe 1.8s var(--ease) infinite;
+  }
+  @keyframes mic-breathe {
+    0%, 100% { transform: scale(1); }
+    50%      { transform: scale(1.012); }
+  }
+  .voice-box {
+    margin-top: 12px; padding: 14px 16px; border-radius: var(--r-block); min-height: 72px;
+    background: var(--card-sunken); border: 1px solid var(--line);
+    font-size: 15px; color: var(--ink); line-height: 1.6;
+  }
+  .voice-box.empty { color: var(--ink-faint); font-size: 13px; }
+  .voice-box .heard {
+    font-size: 11px; color: var(--ink-faint); display: block; margin-bottom: 5px;
+    font-weight: 600; letter-spacing: .012em;
+  }
+  /* 语音出错时把原因显示成告警色，别再让用户对着灰字猜"点了没反应" */
+  #voice-status.is-error { color: var(--bad); }
+  #gesture-status.is-error { color: var(--bad); }
+
+  /* ---------- 视觉选品：抓拍一张，确认后进入现有搜索 ---------- */
+  .vision-panel {
+    margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--line);
+  }
+  .vision-head {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    font-size: 15px; font-weight: 600; margin-bottom: 14px;
+  }
+  .vision-grid {
+    display: grid; grid-template-columns: minmax(220px, 320px) 1fr;
+    gap: 22px; align-items: start;
+  }
+  @media (max-width: 780px) { .vision-grid { grid-template-columns: 1fr; } }
+  .vision-preview {
+    width: 100%; aspect-ratio: 4 / 3; border-radius: var(--r-block);
+    border: 1px dashed var(--line-strong); background: var(--card-sunken);
+    display: grid; place-items: center; overflow: hidden;
+    color: var(--ink-faint); font-size: 13px; text-align: center; padding: 16px;
+  }
+  .vision-preview img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .vision-preview img[hidden] { display: none; }
+  .vision-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .vision-actions button { padding: 9px 15px; font-size: 13.5px; }
+  #vision-cancel[hidden] { display: none; }
+  #vision-status { min-height: 24px; line-height: 1.75; }
+  #vision-status.is-error { color: var(--bad); }
+  #vision-result { margin-top: 12px; }
+  .vision-scene {
+    padding: 12px 14px; border-radius: var(--r-block);
+    background: var(--card-sunken); color: var(--ink-soft); line-height: 1.7;
+  }
+  .vision-tags { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 10px; }
+  .vision-tag {
+    padding: 4px 10px; border-radius: var(--r-pill);
+    background: var(--card-sunken); border: 1px solid var(--line);
+    font-size: 12px; color: var(--ink-soft);
+  }
+  .vision-tag.is-category { background: var(--accent-soft); color: var(--accent-deep); border-color: transparent; }
+  .vision-query-label { display: block; margin: 14px 0 7px; font-size: 12.5px; color: var(--ink-faint); }
+  #vision-query {
+    width: 100%; min-height: 68px; resize: vertical; line-height: 1.65;
+  }
+  .vision-submit { margin-top: 10px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .vision-privacy { margin-top: 14px; font-size: 12px; color: var(--ink-faint); line-height: 1.7; }
+
+  /* ---------- 解析结果与统计 ---------- */
+  .parse-head {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap; margin-bottom: 14px;
+  }
+  .parse-text { flex: 1 1 320px; min-width: 0; font-size: 14.5px; line-height: 1.75; }
+  .parse-text .lead { color: var(--ink-faint); margin-right: 6px; }
+  .parse-head .llm-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  /* 用链接做的按钮（点击会带着 llm=1 重新请求一次），样式与 ghost 按钮对齐 */
+  a.btn-ghost, button.btn-ghost {
+    display: inline-flex; align-items: center; gap: 8px; padding: 10px 17px;
+    border-radius: var(--r-pill); font-size: 13.5px; font-weight: 600;
+    background: var(--accent-soft); color: var(--accent-deep);
+    border: 1px solid transparent; text-decoration: none; white-space: nowrap;
+    box-shadow: none; letter-spacing: -.004em;
+    transition: background .26s var(--ease), transform .18s var(--ease),
+                color .26s var(--ease), opacity .26s var(--ease);
+  }
+  a.btn-ghost:hover, button.btn-ghost:hover { background: var(--card-sunken); color: var(--ink); }
+  a.btn-ghost:active, button.btn-ghost:active { transform: scale(.97); }
+  .btn-ghost.busy { opacity: .55; pointer-events: none; }
+  button.btn-ghost.is-off { background: var(--card-sunken); color: var(--ink-faint); }
+  .stats { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+  .stat {
+    font-size: 12.5px; color: var(--ink-faint); background: var(--card-sunken);
+    border: 1px solid var(--line); border-radius: var(--r-pill); padding: 7px 15px;
+    letter-spacing: .004em;
+  }
+  .stat b {
+    color: var(--ink); font-size: 14px; margin-left: 6px; font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .src-tag {
+    font-size: 11.5px; padding: 3px 10px; border-radius: var(--r-pill);
+    margin-left: 6px; font-weight: 600; white-space: nowrap;
+  }
+  .src-rules { background: var(--card-sunken); color: var(--ink-soft); border: 1px solid var(--line); }
+  .src-hybrid, .src-llm { background: var(--warn-soft); color: var(--warn); }
+  .src-vision { background: var(--ok-soft, var(--accent-soft)); color: var(--ok, var(--accent-deep)); }
+
+  /* ---------- 项目二多模态通道徽章 ---------- */
+  .mm-chip {
+    font-size: 11.5px; padding: 3px 10px; border-radius: var(--r-pill);
+    margin-left: 8px; font-weight: 600; white-space: nowrap;
+    background: var(--accent-soft); color: var(--accent-deep); border: 1px solid transparent;
+  }
+  .mm-chip.is-off { background: var(--card-sunken); color: var(--ink-faint); border-color: var(--line); }
+  .mm-chip.is-on { background: var(--ok-soft, var(--accent-soft)); color: var(--ok, var(--accent-deep)); }
+  .result-tools { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
+
+  /* ---------- 不喜欢的商品：可展开的反馈面板 ---------- */
+  .fb-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .count-pill {
+    display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 7px;
+    border-radius: var(--r-pill); background: var(--card-sunken); border: 1px solid var(--line);
+    font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ink-soft);
+  }
+  .dlist { display: flex; flex-direction: column; gap: 8px; margin-top: 18px; }
+  .drow {
+    display: flex; align-items: center; gap: 14px;
+    padding: 12px 14px; border: 1px solid var(--line);
+    border-radius: var(--r-block); background: var(--card-sunken);
+    animation: materialize .4s var(--ease) backwards;
+  }
+  .drow .undo { flex: 0 0 auto; padding: 8px 15px; font-size: 13px; font-weight: 500; }
+  @media (max-width: 780px) {
+    .drow { flex-wrap: wrap; row-gap: 8px; }
+    .drow .rprice { width: auto; }
+    .drow .undo { margin-left: auto; }
+  }
+
+  /* ---------- 结果列表（一行一条） ---------- */
+  .result-head {
+    display: flex; align-items: flex-end; justify-content: space-between;
+    flex-wrap: wrap; gap: 10px; margin-bottom: 16px;
+  }
+  .result-head .count { font-variant-numeric: tabular-nums; }
+  .rlist { display: flex; flex-direction: column; gap: 8px; }
+  .rrow {
+    display: flex; align-items: center; gap: 14px;
+    padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r-block);
+    background: var(--card-sunken); cursor: pointer;
+    transition: background .26s var(--ease), border-color .26s var(--ease),
+                box-shadow .26s var(--ease), transform .18s var(--ease), opacity .26s var(--ease);
+  }
+  .rrow:hover {
+    background: var(--card); border-color: var(--line-strong);
+    box-shadow: var(--shadow-lift); transform: translateY(-1px);
+  }
+  .rrow:active { transform: scale(.995); }
+  /* 被选为手势目标：墨色描边加一圈浅底，一眼看出反馈会落到哪一行 */
+  .rrow.gesture-target {
+    border-color: var(--ink); box-shadow: 0 0 0 3px var(--card-sunken);
+    background: var(--card);
+  }
+  .rrow.liked { background: var(--ok-soft); border-color: transparent; }
+  .rrow.disliked { opacity: .42; }
+  .rrow .rrank {
+    width: 28px; height: 28px; flex: 0 0 auto; border-radius: 10px;
+    display: grid; place-items: center; background: var(--card); color: var(--ink-faint);
+    border: 1px solid var(--line); font-size: 12.5px; font-weight: 600;
+    font-variant-numeric: tabular-nums; letter-spacing: -.01em;
+  }
+  .rrow.top3 .rrank { background: var(--action-bg); color: var(--action-fg); border-color: transparent; }
+  .rrow .rthumb, .drow .rthumb {
+    width: 52px; height: 52px; flex: 0 0 auto; border-radius: 14px;
+    object-fit: cover; background: var(--card);
+  }
+  .rrow .rmain, .drow .rmain { flex: 1 1 170px; min-width: 0; }
+  .rrow .rname, .drow .rname {
+    font-size: 14.5px; font-weight: 600; color: var(--ink); line-height: 1.4;
+    letter-spacing: -.006em;
+  }
+  .rrow .rmeta, .drow .rmeta {
+    font-size: 12px; color: var(--ink-faint); margin-top: 5px;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  .rrow .rprice, .drow .rprice {
+    flex: 0 0 auto; width: 82px; text-align: right;
+    color: var(--ink); font-weight: 600; font-size: 14px;
+    font-variant-numeric: tabular-nums; letter-spacing: -.01em;
+  }
+  .rrow .rheat { flex: 0 0 auto; width: 92px; text-align: right; font-size: 12px; color: var(--ink-faint); }
+  .rrow .rreason { flex: 0 0 auto; }
+  .rrow .reason-chip {
+    font-size: 11.5px; color: var(--ink-soft); background: var(--card);
+    border: 1px solid var(--line); border-radius: var(--r-pill); padding: 4px 11px;
+    white-space: nowrap; letter-spacing: .004em;
+  }
+  /* 得分：三项加权求和（相似度 / 热度 / 反馈），等宽数字便于上下比较 */
+  .rrow .rscore {
+    flex: 0 0 auto; width: 62px; text-align: right;
+    color: var(--accent-deep); font-weight: 600; font-size: 13.5px;
+    font-variant-numeric: tabular-nums; letter-spacing: -.01em;
+  }
+  .rrow .fb { flex: 0 0 auto; display: flex; gap: 6px; }
+  @media (max-width: 900px) { .rrow .rreason { display: none; } }
+  @media (max-width: 780px) {
+    .rrow { flex-wrap: wrap; row-gap: 8px; }
+    .rrow .rheat { display: none; }
+    .rrow .rscore { width: auto; font-size: 12.5px; }
+    .rrow .fb { margin-left: auto; }
+  }
+
+  /* ---------- 反馈按钮：圆形图标按钮，点过之后染色 ---------- */
+  .fb button {
+    width: 32px; height: 32px; padding: 0; border-radius: var(--r-pill);
+    display: grid; place-items: center; line-height: 1;
+    background: var(--card); color: var(--ink-faint);
+    border: 1px solid var(--line); box-shadow: none; font-weight: 500;
+  }
+  .fb button:hover { background: var(--card-hover); color: var(--ink); border-color: var(--ink-faint); }
+  .fb button:active { transform: scale(.94); }
+  .fb button.on-like { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
+  .fb button.on-dislike { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
+
+  /* ---------- 分页 ---------- */
+  .pager {
+    display: flex; align-items: center; justify-content: center;
+    gap: 7px; margin-top: 24px; flex-wrap: wrap;
+  }
+  .pager a, .pager span.pg {
+    min-width: 38px; height: 38px; padding: 0 13px; border-radius: var(--r-pill);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 13.5px; text-decoration: none; background: var(--card-sunken);
+    border: 1px solid var(--line); color: var(--ink-soft);
+    font-variant-numeric: tabular-nums;
+    transition: background .26s var(--ease), transform .18s var(--ease),
+                color .26s var(--ease), border-color .26s var(--ease);
+  }
+  .pager a:hover { background: var(--card); color: var(--ink); border-color: var(--ink-faint); }
+  .pager a:active { transform: scale(.96); }
+  .pager .cur {
+    background: var(--action-bg); color: var(--action-fg);
+    border-color: transparent; font-weight: 600;
+  }
+  .pager .dis { opacity: .34; pointer-events: none; }
+  .pager .info { border: 0; background: transparent; color: var(--ink-faint); font-size: 13px; }
+
+  /* ---------- 手势面板 ---------- */
+  .gesture-wrap {
+    position: relative; width: 260px; height: 196px; background: #0f0e0d;
+    border-radius: var(--r-block); overflow: hidden; flex: 0 0 auto;
+    border: 1px solid var(--line);
+  }
+  .gesture-wrap video, .gesture-wrap canvas {
+    position: absolute; left: 0; top: 0; width: 260px; height: 196px;
+    transform: scaleX(-1); z-index: 2;
+  }
+  /* 画面铺满取景框，避免因为比例不同在四周留出透明边 */
+  .gesture-wrap video { object-fit: cover; }
+  /* 空状态放在视频下面（z-index 更低）：摄像头没开时 video 不绘制任何像素，
+     空状态自然透出来；画面一开始播放就把它盖住，不需要 JS 切状态。
+     之前挂在 onStatus("running") 上，会被识别循环随后的 searching / tracking
+     状态顶掉，空状态重新盖回画面，看起来就像没有实时画面。 */
+  .gesture-wrap .gesture-ph {
+    position: absolute; inset: 0; z-index: 1; display: grid; place-items: center;
+    color: rgba(255, 255, 255, .46); font-size: 12.5px; letter-spacing: .02em;
+    text-align: center; padding: 0 18px; line-height: 1.6;
+    background: #100f0e;
+  }
+  .gesture-hint { font-size: 12.5px; color: var(--ink-soft); line-height: 1.8; }
+  .gesture-hint b { color: var(--ink); }
+  .target { font-size: 13.5px; margin: 12px 0; color: var(--ink-soft); }
+  .target b { color: var(--ink); font-weight: 600; }
+  #sim-box { display: none; margin-top: 14px; border-top: 1px solid var(--line); padding-top: 14px; }
+  .gesture-actions { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .gesture-actions button { padding: 9px 16px; font-size: 13.5px; }
+
+  /* ---------- Toast：底部浮起的一条墨色胶囊 ---------- */
+  #toast {
+    position: fixed; left: 50%; transform: translateX(-50%) translateY(14px) scale(.98);
+    bottom: 34px; max-width: min(440px, calc(100vw - 32px));
+    background: rgba(28, 27, 24, .90); color: #f7f4ee;
+    -webkit-backdrop-filter: saturate(180%) blur(18px);
+    backdrop-filter: saturate(180%) blur(18px);
+    border: 1px solid rgba(247, 244, 238, .10);
+    padding: 13px 22px; border-radius: var(--r-pill);
+    font-size: 13.5px; letter-spacing: -.004em; text-align: center;
+    opacity: 0; pointer-events: none; z-index: 99;
+    box-shadow: 0 14px 38px rgba(28, 27, 24, .34);
+    transition: opacity .3s var(--ease), transform .38s var(--ease-spring);
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+  @media (prefers-color-scheme: dark) {
+    #toast { background: rgba(243, 239, 232, .94); color: #1c1b18; border-color: transparent; }
+  }
+  @media (prefers-reduced-transparency: reduce) {
+    #toast { background: #1c1b18; color: #f7f4ee; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  }
+{% endblock %}
+
+{% block content %}
+  <h1>智能推荐</h1>
+  <div class="sub">用文字、语音或一张图片描述需求；结果会结合你的历史与反馈排序</div>
+
+  {% if error %}<div class="card err">{{ error }}</div>{% endif %}
+  {% if load_error %}<div class="card err">资源未就绪：{{ load_error }}</div>{% endif %}
+
+  {# ============ 输入区：文字搜索 / 语音输入 各自独立 ============ #}
+  <div class="card">
+    <div class="methods">
+
+      <section class="method">
+        <div class="method-head">
+          <span class="badge"><svg class="ico ico-lg" aria-hidden="true"><use href="#i-keyboard"></use></svg></span>
+          文字搜索
+        </div>
+        <form method="get" action="/search" id="search-form">
+          <div class="searchbar">
+            <div class="field">
+              <input id="q" name="q" value="{{ query }}"
+                     placeholder="例如：洗衣机、台灯或蓝牙耳机" />
+            </div>
+            <button type="submit">开始推荐</button>
+          </div>
+        </form>
+        <div class="chips">
+          试试：
+          {% for e in examples %}<a href="/search?q={{ e | urlencode }}">{{ e }}</a>{% endfor %}
+        </div>
+      </section>
+
+      <section class="method method-voice">
+        <div class="method-head">
+          <span class="badge"><svg class="ico ico-lg" aria-hidden="true"><use href="#i-microphone"></use></svg></span>
+          语音输入
+          <span class="mm-chip" id="voice-engine">检测中…</span>
+        </div>
+        <button type="button" id="mic-btn" class="mic-big">
+          <svg class="ico ico-lg" aria-hidden="true"><use href="#i-microphone"></use></svg>
+          <span id="mic-label">点击开始说话（本地识别）</span>
+        </button>
+        <div class="voice-box empty" id="voice-box">
+          {% if from_voice and query %}
+            <span class="heard">上次语音识别</span>{{ query }}
+          {% else %}
+            点上面的按钮，说出你的需求，识别结果会显示在这里
+          {% endif %}
+        </div>
+        <div id="voice-status" class="muted" style="margin-top:9px"></div>
+        <div style="margin-top:10px">
+          <button type="button" id="voice-search-btn" class="ghost" disabled>
+            <svg class="ico" aria-hidden="true"><use href="#i-search"></use></svg>
+            <span>用这句话搜索</span>
+          </button>
+        </div>
+      </section>
+
+    </div>
+  </div>
+
+  {# ============ 视觉选品：拍照/上传 → 本地视觉模型 → 用户确认搜索 ============ #}
+  <div class="card" id="vision-card">
+    <div class="vision-head">
+      <span class="badge"><svg class="ico ico-lg" aria-hidden="true"><use href="#i-camera"></use></svg></span>
+      视觉选品
+      <span class="mm-chip is-off" id="vision-engine">检测中…</span>
+    </div>
+    <div class="vision-grid">
+      <div>
+        <div class="vision-preview" id="vision-preview">
+          <span id="vision-preview-placeholder">拍一张或选择一张商品/使用场景图片</span>
+          <img id="vision-image" alt="待识别的图片预览" hidden />
+        </div>
+        <div class="vision-actions">
+          <button type="button" class="ghost" id="vision-camera-btn">
+            <svg class="ico" aria-hidden="true"><use href="#i-camera"></use></svg>
+            <span id="vision-camera-label">拍照识别</span>
+          </button>
+          <button type="button" class="ghost" id="vision-file-btn">
+            <svg class="ico" aria-hidden="true"><use href="#i-keyboard"></use></svg>
+            <span>选择图片</span>
+          </button>
+          <button type="button" class="ghost" id="vision-cancel" hidden>取消识别</button>
+          <input type="file" id="vision-file" accept="image/jpeg,image/png" hidden />
+        </div>
+      </div>
+      <div>
+        <div id="vision-status" class="muted" aria-live="polite">
+          图片只用于本次本地识别，不保存到磁盘。
+        </div>
+        <div id="vision-result" hidden>
+          <div class="vision-scene" id="vision-scene"></div>
+          <div class="vision-tags" id="vision-tags"></div>
+          <label class="vision-query-label" for="vision-query">可编辑的推荐条件</label>
+          <textarea id="vision-query" maxlength="240"></textarea>
+          <div class="vision-submit">
+            <button type="button" id="vision-use">
+              <svg class="ico" aria-hidden="true"><use href="#i-search"></use></svg>
+              <span>使用这些条件推荐</span>
+            </button>
+            <span class="muted">视觉选品只按图片中的物品与类目推荐，不添加价格条件。</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="vision-privacy">
+      识别只在本地项目一与项目二服务间完成，不保存原始图片，不识别或推断人物身份。
+      拍摄前请避开身份证件、账号信息等敏感内容。
+    </div>
+  </div>
+
+  {# ============ 我的反馈：不喜欢的商品 ============ #}
+  <div class="card" id="feedback-card">
+    <div class="fb-head">
+      <div style="flex:1 1 300px;min-width:0">
+        <div class="card-title">不喜欢的商品</div>
+        <div class="muted" style="margin-top:6px">
+          点过不喜欢的商品会被排除在推荐结果之外。这里可以随时查看这份名单，
+          把不想再屏蔽的商品放回结果里。
+        </div>
+      </div>
+      <button type="button" class="ghost" id="dislike-toggle"
+              aria-expanded="{{ 'true' if show_dislike else 'false' }}" aria-controls="dislike-panel">
+        <svg class="ico" aria-hidden="true"><use href="#i-thumb-down"></use></svg>
+        <span class="toggle-text">{{ '收起不喜欢的商品' if show_dislike else '展示不喜欢的商品' }}</span>
+        <span class="count-pill" id="dislike-count">{{ disliked_items | length }}</span>
+      </button>
+    </div>
+
+    <div id="dislike-panel" {% if not show_dislike %}hidden{% endif %}>
+      <div class="dlist" id="dislike-list" {% if not disliked_items %}hidden{% endif %}>
+        {% for d in disliked_items %}
+          <article class="drow" data-item="{{ d.item_id }}">
+            <img class="rthumb" src="{{ d.image }}" alt="{{ d.category }}" loading="lazy"
+                 title="类目示意图：{{ d.category }}" />
+            <div class="rmain">
+              <div class="rname">{{ d.name }}</div>
+              <div class="rmeta">
+                <span class="tag">{{ d.category }}</span>
+                <span>{{ d.item_id }}</span>
+                {% if d.updated_at %}<span>点踩于 {{ d.updated_at }}</span>{% endif %}
+              </div>
+            </div>
+            <div class="rprice">{% if d.price is not none %}¥{{ "%.2f"|format(d.price) }}{% endif %}</div>
+            <button type="button" class="ghost undo" data-item="{{ d.item_id }}"
+                    data-name="{{ d.name }}" data-action="dislike"
+                    title="取消点踩，让它重新出现在推荐里">取消点踩</button>
+          </article>
+        {% endfor %}
+      </div>
+      <div class="muted" id="dislike-empty" {% if disliked_items %}hidden{% endif %}
+           style="margin-top:16px">
+        还没有不喜欢的商品：在下面的推荐结果里点「不喜欢」就会出现在这里。
+      </div>
+      <div style="margin-top:16px;display:flex;justify-content:flex-end"
+           {% if not disliked_items %}hidden{% endif %} id="dislike-clear-wrap">
+        <button type="button" class="ghost" id="dislike-clear">清空全部不喜欢</button>
+      </div>
+    </div>
+  </div>
+
+  {% if result %}
+    {# ============ 解析结果与统计 ============ #}
+    <div class="card">
+      <div class="parse-head">
+        <div class="parse-text">
+          <span class="lead">识别到的条件</span>{{ result.constraints.text }}
+          <span class="src-tag src-{{ result.parser.source }}">
+            {{ {'rules':'规则解析','hybrid':'规则+大模型','llm':'大模型解析'}.get(result.parser.source, result.parser.source) }}
+          </span>
+          {% if from_vision %}
+            <span class="src-tag src-vision">含视觉线索</span>
+          {% endif %}
+          {% if result.personalized %}
+            <span class="src-tag src-rules">已个性化</span>
+          {% else %}
+            <span class="src-tag src-rules">未关联客户，按热度推荐</span>
+          {% endif %}
+        </div>
+        <div class="llm-tools">
+          {% if result.parser.llm_available %}
+            <a class="btn-ghost" id="llm-btn" data-available="1"
+               href="/search?q={{ query | urlencode }}{{ '&from=voice' if from_voice else '' }}{{ '&from=vision' if from_vision else '' }}{{ '&show=dislike' if show_dislike else '' }}&llm=1"
+               title="把这句话交给大模型重新解析品类、价格与关键词（需要几秒）">
+              <svg class="ico" aria-hidden="true"><use href="#i-sparkles"></use></svg>
+              <span id="llm-label">{{ '再识别一次' if llm_forced else '让大模型重新识别' }}</span>
+            </a>
+          {% else %}
+            <button type="button" class="btn-ghost is-off" id="llm-btn" data-available="0"
+                    data-note="大模型暂不可用：{{ result.parser.llm }}">
+              <svg class="ico" aria-hidden="true"><use href="#i-sparkles"></use></svg>
+              <span id="llm-label">大模型识别（不可用）</span>
+            </button>
+          {% endif %}
+        </div>
+      </div>
+      <div class="muted" style="margin:0 0 16px">
+        {% if llm_forced %}
+          本次已按你的要求让大模型重新识别（{{ result.parser.llm }}）。自动模式下只在规则
+          解析不出条件或候选太少时才调用大模型；点按钮则每次都强制调用。
+        {% else %}
+          觉得规则解析得不准？点右边的按钮，让大模型重新识别品类、价格与关键词。
+        {% endif %}
+      </div>
+      <div class="stats">
+        <span class="stat">商品总数<b>{{ result.total_items }}</b></span>
+        <span class="stat">符合条件<b>{{ result.filtered_items }}</b></span>
+        <span class="stat">推荐<b>{{ result.ranked_total }}</b></span>
+        <span class="stat">已点赞<b id="stat-liked">{{ feedback_stats.liked }}</b></span>
+        <span class="stat">已点踩<b id="stat-disliked">{{ feedback_stats.disliked }}</b></span>
+      </div>
+      {% if result.notes %}
+        <div class="muted" style="margin-top:16px">
+          {% for n in result.notes %}{{ n }}<br />{% endfor %}
+        </div>
+      {% endif %}
+    </div>
+
+    {% if result.results %}
+    {# ============ 手势反馈 ============ #}
+    <div class="card">
+      <div style="display:flex;gap:26px;flex-wrap:wrap">
+        <div>
+          <div class="gesture-wrap" id="gesture-wrap">
+            <video id="gesture-video" playsinline muted></video>
+            <canvas id="gesture-overlay" width="260" height="196"></canvas>
+            <div class="gesture-ph">摄像头未开启：开启后这里显示实时画面</div>
+          </div>
+          <div class="gesture-actions">
+            <button type="button" id="gesture-btn" class="ghost">
+              <svg class="ico" aria-hidden="true"><use href="#i-camera"></use></svg>
+              <span id="gesture-label">开启手势识别</span>
+            </button>
+            <button type="button" id="device-btn" class="ghost">
+              <svg class="ico" aria-hidden="true"><use href="#i-devices"></use></svg>
+              <span>检测设备</span>
+            </button>
+          </div>
+          <div id="device-info" class="gesture-hint" style="max-width:260px;margin-top:9px"></div>
+        </div>
+        <div style="flex:1;min-width:240px">
+          <div class="method-head" style="margin-bottom:10px">
+            <span class="badge"><svg class="ico ico-lg" aria-hidden="true"><use href="#i-hand"></use></svg></span>
+            手势反馈
+            <span class="mm-chip" id="gesture-engine">检测中…</span>
+          </div>
+          <div class="gesture-hint">
+            <div>竖起大拇指 = 喜欢&nbsp;&nbsp;&nbsp;拇指向下 = 不喜欢</div>
+            <div style="margin-top:7px">把手举到画面中央，手势保持约 1 秒即可确认；点击任意一行可切换手势作用的商品。</div>
+          </div>
+          <div class="target">当前手势目标：<b id="gesture-target-name">未选择</b></div>
+          <div id="gesture-status" class="muted" style="white-space:pre-line">摄像头未开启</div>
+          <div id="sim-box">
+            <div class="gesture-hint" style="margin-top:0">
+              <b>无摄像头时的演示模式</b>：下面是模拟手势，只用于演示「手势 → 反馈 → 排序」这条链路，<b>不是真的识别</b>。
+            </div>
+            <div style="margin-top:9px;display:flex;gap:8px;flex-wrap:wrap">
+              <button type="button" id="sim-like" class="ghost">
+                <svg class="ico" aria-hidden="true"><use href="#i-thumb-up"></use></svg>
+                <span>模拟喜欢</span>
+              </button>
+              <button type="button" id="sim-dislike" class="ghost">
+                <svg class="ico" aria-hidden="true"><use href="#i-thumb-down"></use></svg>
+                <span>模拟不喜欢</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="gesture-hint" id="gesture-how" style="margin-top:18px;border-top:1px solid var(--line);padding-top:14px">
+        识别原理：肤色分割 → 最大连通区域 → 逐行宽度轮廓（上窄下宽为喜欢，上宽下窄为不喜欢）。
+        画面上的绿色区域是识别到的手，蓝色折线是宽度轮廓，识别过程完全可见。
+      </div>
+    </div>
+    {% endif %}
+  {% endif %}
+
+  {# ============ 结果列表（一行一条，每页 5 条） ============ #}
+  {% if result and result.results %}
+    <div class="card">
+      <div class="result-head">
+        <div>
+          <div class="card-title">推荐结果</div>
+          <div class="muted count" style="margin-top:4px">
+            第 {{ (page - 1) * page_size + 1 }}-{{ (page - 1) * page_size + result.results|length }} 条，
+            共 {{ result.ranked_total }} 条
+          </div>
+        </div>
+        <div class="result-tools">
+          <span class="muted">点击任意一行可设为手势目标</span>
+          <button type="button" class="btn-ghost" id="tts-btn"
+                  title="用项目二的 edge-tts 把当前页推荐结果念出来">
+            <svg class="ico" aria-hidden="true"><use href="#i-microphone"></use></svg>
+            <span id="tts-label">🔊 播报本次推荐</span>
+          </button>
+        </div>
+      </div>
+      <div id="tts-status" class="muted" style="margin:-6px 0 12px"></div>
+      {% if weights %}
+        <div class="muted" style="margin:0 0 16px">
+          得分为三项加权求和：相似度 × {{ "%.2f"|format(weights.similarity) }}
+          + 热度 × {{ "%.2f"|format(weights.popularity) }}
+          + 反馈 × {{ "%.2f"|format(weights.feedback) }}　（把鼠标停在分数上可看每项明细）
+        </div>
+      {% endif %}
+      <div class="rlist">
+        {% for r in result.results %}
+          {% set rank = (page - 1) * page_size + loop.index %}
+          <article class="rrow {{ 'top3' if rank <= 3 else '' }} {{ 'liked' if r.feedback == 'like' else ('disliked' if r.feedback == 'dislike' else '') }}"
+                   id="row-{{ r.item_id }}" data-item="{{ r.item_id }}" data-name="{{ r.name }}">
+            <span class="rrank">{{ rank }}</span>
+            <img class="rthumb" src="{{ r.image }}" alt="{{ r.category }}" loading="lazy"
+                 title="类目示意图：{{ r.category }}" />
+            <div class="rmain">
+              <div class="rname">{{ r.name }}</div>
+              <div class="rmeta">
+                <span class="tag">{{ r.category }}</span>
+                <span>{{ r.item_id }}</span>
+              </div>
+            </div>
+            <div class="rprice">¥{{ "%.2f"|format(r.price) }}</div>
+            <div class="rheat">{{ r.users }} 人买过</div>
+            <div class="rscore"
+                 title="综合得分 {{ '%.4f'|format(r.score) }}&#10;相似度 {{ '%.3f'|format(r.sim_score) }} × 0.50&#10;热度 {{ '%.3f'|format(r.pop_score) }} × 0.25&#10;反馈 {{ '%.3f'|format(r.fb_score) }} × 0.25">
+              {{ "%.4f"|format(r.score) }}
+            </div>
+            <div class="rreason">
+              <span class="reason-chip" title="{{ r.reason_detail }}">{{ r.reason }}</span>
+            </div>
+            <div class="fb" data-item="{{ r.item_id }}">
+              <button type="button" data-action="like" aria-label="喜欢" title="喜欢"
+                      class="{{ 'on-like' if r.feedback == 'like' else '' }}">
+                <svg class="ico ico-lg" aria-hidden="true"><use href="#i-thumb-up"></use></svg>
+              </button>
+              <button type="button" data-action="dislike" aria-label="不喜欢" title="不喜欢"
+                      class="{{ 'on-dislike' if r.feedback == 'dislike' else '' }}">
+                <svg class="ico ico-lg" aria-hidden="true"><use href="#i-thumb-down"></use></svg>
+              </button>
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+
+      {# ---------- 翻页 ---------- #}
+      {% if total_pages > 1 %}
+        {% set base = '/search?q=' ~ (query | urlencode) ~ ('&from=voice' if from_voice else '') ~ ('&from=vision' if from_vision else '') ~ ('&llm=1' if llm_forced else '') %}
+        {% set start = [1, page - 2] | max %}
+        {% set end = [total_pages, start + 4] | min %}
+        {% set start = [1, end - 4] | max %}
+        <div class="pager">
+          <a href="{{ base }}&page=1" class="{{ 'dis' if page == 1 else '' }}">首页</a>
+          <a href="{{ base }}&page={{ page - 1 }}" class="{{ 'dis' if page == 1 else '' }}">上一页</a>
+          {% for p in range(start, end + 1) %}
+            {% if p == page %}
+              <span class="pg cur">{{ p }}</span>
+            {% else %}
+              <a href="{{ base }}&page={{ p }}">{{ p }}</a>
+            {% endif %}
+          {% endfor %}
+          <a href="{{ base }}&page={{ page + 1 }}" class="{{ 'dis' if page == total_pages else '' }}">下一页</a>
+          <a href="{{ base }}&page={{ total_pages }}" class="{{ 'dis' if page == total_pages else '' }}">末页</a>
+          <span class="pg info">第 {{ page }} / {{ total_pages }} 页</span>
+        </div>
+      {% endif %}
+
+      <div class="muted" style="margin-top:18px">
+        点赞会让该商品及其相似商品在下次排序中靠前；点踩会把它从结果中剔除。
+      </div>
+    </div>
+  {% elif result %}
+    <div class="card">
+      <div class="card-title">没有符合条件的商品</div>
+      <div class="muted" style="margin-top:6px">
+        试试放宽价格区间，或换一个品类词再查一次。
+      </div>
+    </div>
+  {% else %}
+    <div class="card">
+      <div class="card-title">还没有查询</div>
+      <div class="muted" style="margin-top:6px">
+        在上面用文字描述需求，或点「点击开始说话」用语音说一句。
+      </div>
+    </div>
+  {% endif %}
+
+  <div id="toast"></div>
+{% endblock %}
+
+{% block script %}
+<script src="/static/js/devices.js"></script>
+<script src="/static/js/voice.js"></script>
+<script src="/static/js/gesture.js"></script>
+<script src="/static/js/asr.js"></script>
+<script src="/static/js/tts.js"></script>
+<script>
+  /* 项目二多模态桥接服务的可用性（服务端探测后注入）：页面据此决定
+   * 语音走本地 ASR 还是浏览器识别、手势走 MediaPipe 还是内置算法。 */
+  window.MM_STATUS = {{ multimodal | tojson }};
+</script>
+<script src="/static/js/vision.js"></script>
+<script>
+(function () {
+  "use strict";
+  var toastEl = document.getElementById("toast");
+  var toastTimer = null;
+  function toast(text) {
+    toastEl.textContent = text;
+    toastEl.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { toastEl.classList.remove("show"); }, 2600);
+  }
+
+  /* ---------------- 反馈提交 ---------------- */
+  function refreshCard(itemId, state) {
+    var card = document.getElementById("row-" + itemId);
+    if (!card) return;
+    var box = card.querySelector(".fb");
+    if (box) {
+      box.querySelectorAll("button").forEach(function (btn) {
+        btn.classList.remove("on-like", "on-dislike");
+        if (state === "like" && btn.dataset.action === "like") btn.classList.add("on-like");
+        if (state === "dislike" && btn.dataset.action === "dislike") btn.classList.add("on-dislike");
+      });
+    }
+    card.classList.remove("liked", "disliked");
+    if (state === "like") card.classList.add("liked");
+    if (state === "dislike") card.classList.add("disliked");
+  }
+
+  function sendFeedback(itemId, action) {
+    return fetch("/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ item_id: itemId, action: action }),
+    })
+      .then(function (resp) { return resp.json().then(function (d) { return { ok: resp.ok, data: d }; }); })
+      .then(function (r) {
+        if (!r.ok) { toast(r.data.error || "操作失败"); return null; }
+        refreshCard(itemId, r.data.state);
+        var l = document.getElementById("stat-liked"), d = document.getElementById("stat-disliked");
+        if (l) l.textContent = r.data.stats.liked;
+        if (d) d.textContent = r.data.stats.disliked;
+        toast(r.data.hint);
+        return r.data;
+      })
+      .catch(function (err) { toast("网络错误：" + err.message); return null; });
+  }
+
+  document.querySelectorAll(".fb button").forEach(function (btn) {
+    btn.addEventListener("click", function (event) {
+      event.stopPropagation();
+      btn.disabled = true;
+      sendFeedback(btn.parentElement.dataset.item, btn.dataset.action).finally(function () {
+        btn.disabled = false;
+      });
+    });
+  });
+
+  /* ---------------- 大模型重新识别 ---------------- */
+  // 按钮本身是个链接（点了会带 llm=1 重新请求一次）；这里只负责
+  // ① 不可用时给出原因，② 点击后立刻改文案，避免用户以为没反应而连点。
+  var llmBtn = document.getElementById("llm-btn");
+  var llmLabel = document.getElementById("llm-label");
+  if (llmBtn) {
+    llmBtn.addEventListener("click", function (event) {
+      if (llmBtn.dataset.available !== "1") {
+        event.preventDefault();
+        toast(llmBtn.dataset.note || "大模型当前不可用");
+        return;
+      }
+      if (llmBtn.classList.contains("busy")) {
+        event.preventDefault();
+        return;
+      }
+      llmBtn.classList.add("busy");
+      if (llmLabel) llmLabel.textContent = "大模型识别中";
+      toast("正在请大模型重新理解这句话，请稍候");
+    });
+  }
+
+  /* ---------------- 不喜欢的商品面板 ---------------- */
+  var dislikeToggle = document.getElementById("dislike-toggle");
+  var dislikePanel = document.getElementById("dislike-panel");
+  var dislikeList = document.getElementById("dislike-list");
+  var dislikeEmpty = document.getElementById("dislike-empty");
+  var dislikeClear = document.getElementById("dislike-clear");
+  var dislikeClearWrap = document.getElementById("dislike-clear-wrap");
+  var dislikeCount = document.getElementById("dislike-count");
+
+  function setDislikeCount(n) {
+    if (dislikeCount) dislikeCount.textContent = n;
+    var stat = document.getElementById("stat-disliked");
+    if (stat) stat.textContent = n;
+  }
+
+  function setDislikeEmpty(empty) {
+    if (dislikeList) dislikeList.hidden = empty;
+    if (dislikeEmpty) dislikeEmpty.hidden = !empty;
+    if (dislikeClearWrap) dislikeClearWrap.hidden = empty;
+  }
+
+  function toggleDislike(open) {
+    if (!dislikePanel) return;
+    dislikePanel.hidden = !open;
+    if (dislikeToggle) {
+      dislikeToggle.setAttribute("aria-expanded", open ? "true" : "false");
+      var label = dislikeToggle.querySelector(".toggle-text");
+      if (label) label.textContent = open ? "收起不喜欢的商品" : "展示不喜欢的商品";
+    }
+    // 「大模型识别」是个会重新加载页面的链接：把面板的开关状态带进 URL，
+    // 重新加载后面板保持原样，不会突然合上。
+    if (llmBtn && llmBtn.dataset.available === "1") {
+      var href = llmBtn.getAttribute("href") || "";
+      href = href.replace("&show=dislike", "");
+      llmBtn.setAttribute("href", open ? href + "&show=dislike" : href);
+    }
+  }
+
+  if (dislikeToggle) {
+    dislikeToggle.addEventListener("click", function () { toggleDislike(dislikePanel.hidden); });
+  }
+  if (dislikePanel && !dislikePanel.hidden) toggleDislike(true);
+
+  // 取消单条点踩：复用 /feedback 的"再点一次 = 取消"语义
+  if (dislikeList) {
+    dislikeList.addEventListener("click", function (event) {
+      var btn = event.target.closest(".undo");
+      if (!btn || btn.disabled) return;
+      event.stopPropagation();
+      btn.disabled = true;
+      sendFeedback(btn.dataset.item, btn.dataset.action || "dislike").then(function (data) {
+        btn.disabled = false;
+        if (!data) return;
+        var row = btn.closest(".drow");
+        if (row) row.remove();
+        var left = dislikeList.querySelectorAll(".drow").length;
+        setDislikeCount(left);
+        if (left === 0) setDislikeEmpty(true);
+      });
+    });
+  }
+
+  if (dislikeClear) {
+    dislikeClear.addEventListener("click", function () {
+      if (!window.confirm("确定清空全部「不喜欢」记录吗？之后它们会重新出现在推荐结果里。")) return;
+      dislikeClear.disabled = true;
+      fetch("/feedback/clear", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "dislike" }),
+      })
+        .then(function (resp) { return resp.json().then(function (d) { return { ok: resp.ok, data: d }; }); })
+        .then(function (r) {
+          if (!r.ok) { toast(r.data.error || "操作失败"); return; }
+          if (dislikeList) dislikeList.innerHTML = "";
+          setDislikeEmpty(true);
+          setDislikeCount(r.data.stats.disliked);
+          // 结果行上的「不喜欢」标记也跟着清掉
+          document.querySelectorAll(".rrow.disliked").forEach(function (row) {
+            row.classList.remove("disliked");
+            row.querySelectorAll('.fb button[data-action="dislike"]').forEach(function (b) {
+              b.classList.remove("on-dislike");
+            });
+          });
+          toast(r.data.hint);
+        })
+        .catch(function (err) { toast("网络错误：" + err.message); })
+        .finally(function () { dislikeClear.disabled = false; });
+    });
+  }
+
+  /* ---------------- 手势目标 ---------------- */
+  var gestureTarget = null, gestureTargetName = "";
+  var targetLabel = document.getElementById("gesture-target-name");
+  function setTarget(itemId, name) {
+    gestureTarget = itemId;
+    gestureTargetName = name || itemId;
+    if (targetLabel) targetLabel.textContent = gestureTargetName + "（" + itemId + "）";
+    document.querySelectorAll(".rrow").forEach(function (c) {
+      c.classList.toggle("gesture-target", c.dataset.item === itemId);
+    });
+  }
+  var cards = document.querySelectorAll(".rrow");
+  cards.forEach(function (c) {
+    c.addEventListener("click", function () { setTarget(c.dataset.item, c.dataset.name); });
+  });
+  if (cards.length) setTarget(cards[0].dataset.item, cards[0].dataset.name);
+
+  /* ---------------- 语音输入（独立于文字搜索框） ---------------- */
+  var voiceBox = document.getElementById("voice-box");
+  var voiceStatus = document.getElementById("voice-status");
+  var micBtn = document.getElementById("mic-btn");
+  var micLabel = document.getElementById("mic-label");
+  var voiceSearchBtn = document.getElementById("voice-search-btn");
+  var heard = "";
+
+  function showHeard(text, interim) {
+    if (!voiceBox) return;
+    if (!text) {
+      voiceBox.className = "voice-box empty";
+      voiceBox.textContent = "点上面的按钮，说出你的需求，识别结果会显示在这里";
+      return;
+    }
+    voiceBox.className = "voice-box";
+    voiceBox.innerHTML = '<span class="heard">' + (interim ? "正在识别" : "听到的内容") + "</span>";
+    voiceBox.appendChild(document.createTextNode(text));
+  }
+
+  /* 语音有两条通道：
+   *   ① 本地 ASR（项目二的 SenseVoiceSmall，走 /api/voice）——优先；
+   *   ② 浏览器 Web Speech（voice.js）——桥接服务不可用时的降级。
+   * 通道是运行时决定的：真出了 bridge-down 错误才切换，切换过程在状态栏写清楚。 */
+  var mmStatus = window.MM_STATUS || {};
+  var voiceEngineChip = document.getElementById("voice-engine");
+  var voiceChannel = "browser"; // "local" | "browser"
+  var activeVoice = null;
+
+  function voiceBusy(v) {
+    return !!(v && (v.listening || v.recording));
+  }
+
+  function renderVoiceChip() {
+    if (!voiceEngineChip) return;
+    var local = voiceChannel === "local";
+    voiceEngineChip.textContent = local ? "通道：本地 ASR（项目二）" : "通道：浏览器识别";
+    voiceEngineChip.classList.toggle("is-on", local);
+    voiceEngineChip.classList.toggle("is-off", !local);
+  }
+
+  function onVoiceStatus(kind, message) {
+    if (voiceStatus) {
+      voiceStatus.textContent = message;
+      voiceStatus.classList.toggle(
+        "is-error", kind === "error" || kind === "nodevice" || kind === "unsupported"
+      );
+    }
+    var busy = kind === "listening" || kind === "uploading";
+    if (micBtn) micBtn.classList.toggle("on", busy);
+    if (micLabel) {
+      if (kind === "listening") micLabel.textContent = "🔴 正在录音，点击停止";
+      else if (kind === "uploading") micLabel.textContent = "本地识别中…";
+      else if (voiceChannel === "local") micLabel.textContent = "点击开始说话（本地识别）";
+      else micLabel.textContent = "点击开始说话（浏览器识别）";
+    }
+  }
+
+  function onVoiceResult(text, isFinal) {
+    heard = text;
+    showHeard(text, !isFinal);
+    if (voiceSearchBtn) voiceSearchBtn.disabled = !text;
+    if (isFinal && text && voiceStatus) {
+      voiceStatus.textContent = "识别完成，点「用这句话搜索」即可查询";
+    }
+  }
+
+  function buildBrowserVoice() {
+    if (activeVoice) return activeVoice;
+    voiceChannel = "browser";
+    activeVoice = new VoiceInput({
+      lang: "zh-CN",
+      onResult: onVoiceResult,
+      onStatus: onVoiceStatus,
+    });
+    renderVoiceChip();
+    return activeVoice;
+  }
+
+  function buildLocalVoice() {
+    voiceChannel = "local";
+    activeVoice = new LocalASR({
+      endpoint: "/api/voice",
+      onResult: onVoiceResult,
+      onStatus: onVoiceStatus,
+      onError: function (code) {
+        // 只有"桥接服务没起来"才值得切换通道；设备/权限问题换通道也没用。
+        if (code === "bridge-down") {
+          activeVoice = null;
+          buildBrowserVoice();
+          if (voiceEngineChip) voiceEngineChip.textContent = "通道：浏览器识别（本地服务不可用）";
+          if (micLabel) micLabel.textContent = "点击开始说话（浏览器识别）";
+          if (voiceStatus) {
+            voiceStatus.textContent +=
+              "\n已自动改用浏览器语音识别。启动本地服务：cd multimodal_ai_project1 && python bridge_server.py";
+          }
+        }
+      },
+    });
+    renderVoiceChip();
+    return activeVoice;
+  }
+
+  function ensureVoice() {
+    if (activeVoice) return activeVoice;
+    if (mmStatus.available && mmStatus.asr && window.LocalASR) return buildLocalVoice();
+    return buildBrowserVoice();
+  }
+
+  if (micBtn) {
+    // 初始状态：本地 ASR 不是所有浏览器都支持（需要 AudioContext + getUserMedia）
+    if (mmStatus.available && mmStatus.asr) {
+      voiceChannel = window.LocalASR && window.LocalASR.prototype.supported() ? "local" : "browser";
+    }
+    renderVoiceChip();
+    if (voiceChannel === "browser" && window.VoiceInput && !VoiceInput.prototype.supported()) {
+      micBtn.disabled = true;
+      if (micLabel) micLabel.textContent = "当前浏览器不支持语音识别";
+    }
+    micBtn.addEventListener("click", function () {
+      var v = ensureVoice();
+      // 先给一个即时回应：设备预检/浏览器握手都要几百毫秒，
+      // 这段时间里按钮看起来"没反应"，会被当成功能坏了。
+      if (voiceStatus && !voiceBusy(v)) {
+        voiceStatus.textContent = voiceChannel === "local"
+          ? "正在打开麦克风（本地识别），请稍候"
+          : "正在启动语音识别，请稍候";
+        voiceStatus.classList.remove("is-error");
+      }
+      if (v.supported && !v.supported()) {
+        voiceStatus.textContent = "当前浏览器不支持该语音通道，请改用键盘输入";
+        return;
+      }
+      v.toggle();
+    });
+  }
+  if (voiceSearchBtn) {
+    voiceSearchBtn.addEventListener("click", function () {
+      if (!heard) { toast("还没有识别到内容，请先点「点击开始说话」"); return; }
+      window.location.href = "/search?from=voice&q=" + encodeURIComponent(heard);
+    });
+  }
+
+  /* ---------------- 设备检测 ---------------- */
+  var deviceBtn = document.getElementById("device-btn");
+  var deviceInfo = document.getElementById("device-info");
+  var simBox = document.getElementById("sim-box");
+  function renderDevices(sum) {
+    // 没有查询结果时手势面板不渲染，设备检测仍可能由页面初始化触发。
+    if (!deviceInfo) return;
+    var counts = Object.keys(sum.counts)
+      .map(function (k) { return (DeviceUtil.KIND_LABEL[k] || k) + " × " + sum.counts[k]; })
+      .join("，");
+    var lines = ["共 " + sum.total + " 个媒体设备：" + (counts || "无")];
+    if (!sum.hasCamera) lines.push("注意：没有摄像头，手势识别不可用");
+    if (!sum.hasMicrophone) lines.push("注意：没有麦克风，语音输入不可用");
+    if (sum.hasCamera && sum.hasMicrophone) lines.push("设备齐全，可以正常使用语音与手势");
+    deviceInfo.textContent = lines.join("\n");
+    if (simBox) simBox.style.display = sum.hasCamera ? "none" : "block";
+  }
+  function checkDevices() {
+    if (!deviceInfo) return;
+    if (!window.DeviceUtil) { deviceInfo.textContent = "设备检测不可用"; return; }
+    DeviceUtil.summary().then(renderDevices);
+  }
+  checkDevices();
+  if (deviceBtn) deviceBtn.addEventListener("click", checkDevices);
+
+  /* ---------------- 手势识别 ---------------- */
+  var video = document.getElementById("gesture-video");
+  var overlay = document.getElementById("gesture-overlay");
+  var gBtn = document.getElementById("gesture-btn");
+  var gLabel = document.getElementById("gesture-label");
+  var gStatus = document.getElementById("gesture-status");
+
+  function simulateGesture(label) {
+    if (!gestureTarget) { toast("请先点击一行选择手势目标"); return; }
+    sendFeedback(gestureTarget, label === "like" ? "like" : "dislike").then(function (data) {
+      if (data) toast((label === "like" ? "模拟手势：喜欢 " : "模拟手势：不喜欢 ") + gestureTargetName);
+    });
+  }
+  var simLike = document.getElementById("sim-like"), simDislike = document.getElementById("sim-dislike");
+  if (simLike) simLike.addEventListener("click", function () { simulateGesture("like"); });
+  if (simDislike) simDislike.addEventListener("click", function () { simulateGesture("dislike"); });
+
+  /* 手势同样有两条通道：
+   *   ① MediaPipe（项目二桥接服务，/api/gesture）——关键点判定，精度高，优先；
+   *   ② 内置 JS 算法（肤色分割 + 宽度轮廓）——桥接服务不可用时的降级。
+   * 两个类的对外接口一致（running / toggle / stop / onStatus / onGesture），
+   * 所以按钮逻辑完全不用改。 */
+  var gestureEngineChip = document.getElementById("gesture-engine");
+  var gestureHow = document.getElementById("gesture-how");
+  var gestureBridgeMode = !!(mmStatus.available && mmStatus.gesture && window.GestureBridge);
+
+  function renderGestureChip(mode) {
+    if (gestureEngineChip) {
+      gestureEngineChip.textContent = mode === "mediapipe"
+        ? "通道：MediaPipe（项目二）"
+        : "通道：内置算法";
+      gestureEngineChip.classList.toggle("is-on", mode === "mediapipe");
+      gestureEngineChip.classList.toggle("is-off", mode !== "mediapipe");
+    }
+    if (gestureHow) {
+      gestureHow.innerHTML = mode === "mediapipe"
+        ? "识别原理：摄像头画面按 5 帧/秒送到项目二的 MediaPipe 手部关键点模型，" +
+          "由 21 个关键点的几何关系判定竖拇指 / 倒拇指；前端再做 0.9 秒稳定保持与 1.5 秒冷却，避免误触。" +
+          "画面上的方框是当前判定结果。"
+        : "识别原理：肤色分割 → 最大连通区域 → 逐行宽度轮廓（上窄下宽为喜欢，上宽下窄为不喜欢）。" +
+          "画面上的绿色区域是识别到的手，蓝色折线是宽度轮廓，识别过程完全可见。";
+    }
+  }
+
+  var gesture = null;
+  function buildGesture(mode) {
+    var options = {
+      video: video,
+      overlay: overlay,
+      holdMs: 900,
+      minConfidence: 0.20,
+      onStatus: function (kind, message) {
+        if (!gStatus) return;
+        gStatus.textContent = message;
+        gStatus.classList.toggle("is-error", kind === "error" || kind === "nodevice");
+      },
+      onGesture: function (label) {
+        if (!gestureTarget) { toast("请先点击一行选择手势目标"); return; }
+        sendFeedback(gestureTarget, label === "like" ? "like" : "dislike").then(function (data) {
+          if (data) {
+            var via = mode === "mediapipe" ? "手势(MediaPipe)：" : "手势：";
+            toast(via + (label === "like" ? "喜欢 " : "不喜欢 ") + gestureTargetName);
+          }
+        });
+      },
+    };
+    if (mode === "mediapipe") {
+      options.endpoint = "/api/gesture";
+      options.fps = mmStatus.gesture_fps || 5;
+      // 桥接服务在中途挂掉：自动降级到内置算法，并把状态说清楚
+      options.onFallback = function (reason) {
+        renderGestureChip("builtin");
+        buildGesture("builtin");
+        if (gLabel) gLabel.textContent = "开启手势识别";
+        gBtn.classList.add("ghost");
+        if (gStatus) {
+          gStatus.textContent =
+            "本地手势服务不可用（" + reason + "），已切换到内置算法。\n" +
+            "启动本地服务：cd multimodal_ai_project1 && python bridge_server.py";
+        }
+      };
+    }
+    gesture = mode === "mediapipe" ? new GestureBridge(options) : new GestureRecognizer(options);
+    renderGestureChip(mode);
+    return gesture;
+  }
+
+  if (video && overlay && gBtn && window.GestureRecognizer) {
+    buildGesture(gestureBridgeMode ? "mediapipe" : "builtin");
+    gBtn.addEventListener("click", function () {
+      if (gStatus && !gesture.running) {
+        gStatus.textContent = gestureBridgeMode
+          ? "正在请求摄像头权限（首次会先加载 MediaPipe 模型，可能要十几秒）…"
+          : "正在请求摄像头权限，请稍候";
+        gStatus.classList.remove("is-error");
+      }
+      gesture.toggle().then(function (running) {
+        if (gLabel) gLabel.textContent = running ? "关闭手势识别" : "开启手势识别";
+        gBtn.classList.toggle("ghost", !running);
+      });
+    });
+    window.addEventListener("beforeunload", function () { gesture.stop(); });
+  } else if (gBtn) {
+    gBtn.disabled = true;
+  }
+
+  /* ---------------- 语音播报（项目二 edge-tts） ---------------- */
+  var ttsBtn = document.getElementById("tts-btn");
+  var ttsLabel = document.getElementById("tts-label");
+  var ttsStatus = document.getElementById("tts-status");
+  if (ttsBtn && window.TTSPlayer) {
+    var tts = new TTSPlayer({
+      endpoint: "/api/tts",
+      onStatus: function (kind, message) {
+        if (ttsStatus) {
+          ttsStatus.textContent = message;
+          ttsStatus.classList.toggle("is-error", kind === "error");
+        }
+        if (ttsLabel) {
+          ttsLabel.textContent = kind === "playing" ? "⏹ 停止播报"
+            : kind === "synthesizing" ? "合成中…" : "🔊 播报本次推荐";
+        }
+        if (ttsBtn) ttsBtn.classList.toggle("busy", kind === "synthesizing");
+      },
+    });
+    var ttsAvailable = !!(mmStatus.available && mmStatus.tts);
+    if (!ttsAvailable) {
+      ttsBtn.disabled = true;
+      ttsBtn.title = "本地服务未启动：" + (mmStatus.reason || "项目二桥接服务不可用");
+      if (ttsStatus) ttsStatus.textContent = "语音播报不可用（项目二桥接服务未启动）";
+    } else {
+      ttsBtn.addEventListener("click", function () {
+        if (tts.playing) { tts.stop(); ttsLabel.textContent = "🔊 播报本次推荐"; if (ttsStatus) ttsStatus.textContent = "已停止播报"; return; }
+        // 直接从当前页的卡片里取数据，翻页后播报的就是当前这一页
+        var rows = [];
+        document.querySelectorAll(".rrow").forEach(function (c) {
+          var name = c.querySelector(".rname");
+          var price = c.querySelector(".rprice");
+          var reason = c.querySelector(".rreason .reason-chip");
+          rows.push({
+            name: name ? name.textContent.trim() : "",
+            price: price ? price.textContent.replace(/[^0-9.]/g, "") : "",
+            reason: reason ? reason.textContent.trim() : "",
+          });
+        });
+        var text = tts.buildSummary(rows, 5);
+        if (!text) { toast("当前页没有可播报的结果"); return; }
+        tts.toggle(text);
+      });
+    }
+  }
+})();
+</script>
+{% endblock %}

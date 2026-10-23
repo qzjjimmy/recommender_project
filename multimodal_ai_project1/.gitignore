@@ -1,0 +1,29 @@
+# 预训练模型文件
+models/SenseVoiceSmall/
+models/Qwen2-1.5B-Instruct/
+models/Qwen2-VL-2B-Instruct/
+
+# 输出产物
+outputs/*.wav
+outputs/*.mp3
+outputs/*.jpg
+outputs/*.png
+outputs/*.csv
+outputs/temp/
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# 虚拟环境
+venv/
+.env/
+
+# IDE
+.vscode/
+.idea/
+
+# 系统文件
+.DS_Store
+Thumbs.db

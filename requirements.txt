@@ -1,0 +1,9 @@
+pandas>=1.5
+numpy>=1.23
+scikit-learn>=1.2
+gensim>=4.3
+flask>=2.3
+matplotlib>=3.7
+lightgbm>=3.3
+# 可选：向量库（阶段三可用暴力余弦替代）
+# chromadb>=0.4

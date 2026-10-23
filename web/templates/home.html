@@ -1,0 +1,789 @@
+{% extends "layout.html" %}
+{% block title %}推荐首页 · 推荐系统实践{% endblock %}
+{% block style %}
+  /* ==========================================================================
+     顶部滚动推荐（轮播）：首页最显眼的位置
+     大图 = 联网抓来的类目照片（scripts/15_fetch_web_images.py），抓不到就退回
+     本地类目示意图 + 右侧方图缩略，两种形态页面都完整。
+     ========================================================================== */
+  .spot {
+    position: relative; margin-bottom: 18px; border-radius: var(--r-card);
+    background: var(--card); border: 1px solid var(--line);
+    box-shadow: var(--shadow-card); overflow: hidden;
+  }
+  .spot-head {
+    display: flex; align-items: flex-end; justify-content: space-between;
+    gap: 14px; padding: 18px 22px 14px; flex-wrap: wrap;
+  }
+  /* 标题块可压缩：窄屏时让箭头换到下一行，而不是被挤出卡片 */
+  .spot-head > div:first-child { flex: 1 1 260px; min-width: 0; }
+  .spot-head .spot-nav { margin-left: auto; }
+  .spot-title { font-size: 20px; font-weight: 600; letter-spacing: -.02em; margin: 6px 0 0; }
+  .spot-title .n { font-variant-numeric: tabular-nums; }
+  .spot-nav { display: flex; align-items: center; gap: 8px; }
+  .spot-count {
+    font-size: 12.5px; color: var(--ink-faint); font-variant-numeric: tabular-nums;
+    margin-right: 4px; letter-spacing: .02em;
+  }
+  .navbtn {
+    width: 38px; height: 38px; padding: 0; display: grid; place-items: center;
+    border-radius: var(--r-pill); background: var(--card-sunken); color: var(--ink-soft);
+    border: 1px solid var(--line); box-shadow: none;
+    transition: background .24s var(--ease), color .24s var(--ease),
+                border-color .24s var(--ease), transform .16s var(--ease);
+  }
+  .navbtn:hover { background: var(--card-hover); color: var(--ink); border-color: var(--line-strong); }
+  .navbtn:active { transform: scale(.93); }
+
+  .spot-stage {
+    position: relative; aspect-ratio: 21 / 9; min-height: 330px;
+    background: var(--card-sunken); overflow: hidden;
+  }
+  .slide {
+    position: absolute; inset: 0; display: block; text-decoration: none;
+    color: #fff; opacity: 0; pointer-events: none;
+    transition: opacity .42s var(--ease);
+  }
+  .slide.is-on { opacity: 1; pointer-events: auto; }
+  .slide-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .slide-scrim {
+    position: absolute; inset: 0;
+    background:
+      linear-gradient(90deg, rgba(14, 13, 12, .90) 0%, rgba(14, 13, 12, .74) 34%,
+                      rgba(14, 13, 12, .30) 62%, rgba(14, 13, 12, .06) 100%),
+      linear-gradient(0deg, rgba(14, 13, 12, .58) 0%, rgba(14, 13, 12, 0) 58%);
+  }
+  .slide.slide-fallback .slide-scrim {
+    background: linear-gradient(120deg, #23211e 0%, #3a3733 58%, #4b4741 100%);
+  }
+  .slide-thumb {
+    position: absolute; right: clamp(18px, 4vw, 54px); bottom: clamp(18px, 4vw, 44px);
+    width: clamp(88px, 13vw, 148px); aspect-ratio: 1 / 1; border-radius: 20px;
+    object-fit: cover; border: 1px solid rgba(255, 255, 255, .22);
+    box-shadow: 0 18px 40px rgba(0, 0, 0, .34);
+  }
+  .slide-body {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    max-width: min(660px, 74%); padding: clamp(20px, 3vw, 34px);
+    display: flex; flex-direction: column; gap: 9px;
+    /* 照片是联网抓的、亮度不可控：给文字加一层柔和外发光，浅色照片上也读得清 */
+    text-shadow: 0 1px 14px rgba(0, 0, 0, .55);
+  }
+  /* 进场：整体淡入，正文元素 40ms 依次上浮（30~80ms 的错峰，看得出"一条一条来"） */
+  .slide-body > * {
+    opacity: 0; transform: translateY(10px);
+    transition: opacity .40s var(--ease), transform .40s var(--ease);
+  }
+  .slide.is-on .slide-body > * { opacity: 1; transform: none; }
+  .slide.is-on .slide-body > *:nth-child(1) { transition-delay: .04s; }
+  .slide.is-on .slide-body > *:nth-child(2) { transition-delay: .08s; }
+  .slide.is-on .slide-body > *:nth-child(3) { transition-delay: .12s; }
+  .slide.is-on .slide-body > *:nth-child(4) { transition-delay: .16s; }
+  .slide.is-on .slide-body > *:nth-child(5) { transition-delay: .20s; }
+
+  .slide-badges { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+  .sbadge {
+    display: inline-flex; align-items: center; padding: 4px 12px; border-radius: var(--r-pill);
+    font-size: 12px; font-weight: 600; letter-spacing: .01em;
+    background: rgba(247, 244, 238, .92); color: #1c1b18;
+  }
+  .sbadge.is-personal { background: #b7cf9f; color: #253018; }
+  .sbadge.quiet { background: rgba(247, 244, 238, .16); color: #f2eee7; font-weight: 500; }
+  .slide-name {
+    font-size: clamp(21px, 2.9vw, 34px); font-weight: 600; line-height: 1.15;
+    letter-spacing: -.026em; margin: 0; color: #fff;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden; text-wrap: balance;
+  }
+  .slide-meta {
+    display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+    font-size: 13px; color: rgba(247, 244, 238, .80);
+  }
+  .slide-price {
+    font-size: clamp(18px, 1.9vw, 24px); font-weight: 600; color: #fff;
+    font-variant-numeric: tabular-nums; letter-spacing: -.01em;
+  }
+  .slide-why {
+    margin: 0; font-size: 13px; line-height: 1.6; color: rgba(247, 244, 238, .78);
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .slide-cta {
+    display: inline-flex; align-items: center; gap: 8px; align-self: flex-start;
+    padding: 10px 18px; margin-top: 2px; border-radius: var(--r-pill);
+    background: #f7f4ee; color: #1c1b18; font-size: 14px; font-weight: 500;
+  }
+  .spot-progress {
+    position: absolute; left: 0; bottom: 0; height: 3px; width: 100%;
+    background: rgba(247, 244, 238, .92); transform-origin: left center;
+    transform: scaleX(0); pointer-events: none;
+  }
+  .slide.is-on .spot-progress { animation: spot-run var(--spot-dur, 6s) linear forwards; }
+  .spot.is-paused .slide.is-on .spot-progress { animation-play-state: paused; }
+  @keyframes spot-run { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+
+  .spot-dots {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 14px 22px 18px;
+  }
+  .sdot {
+    width: 8px; height: 8px; padding: 0; border-radius: var(--r-pill);
+    background: var(--line-strong); border: 0; box-shadow: none;
+    transition: width .28s var(--ease), background .28s var(--ease);
+  }
+  .sdot:hover { background: var(--ink-faint); }
+  .sdot.on { width: 26px; background: var(--accent); }
+  .sdot:active { transform: none; }
+  .spot.is-single .spot-nav, .spot.is-single .spot-dots { display: none; }
+
+  @media (max-width: 720px) {
+    .spot-stage { aspect-ratio: 4 / 3; min-height: 360px; }
+    .slide-body { max-width: 100%; padding: 20px 18px 24px; }
+    .slide.slide-fallback .slide-thumb { display: none; }
+    .spot-head { padding: 16px 18px 12px; }
+    .spot-head > div:first-child { flex: 1 1 100%; }
+    .spot-nav { width: 100%; justify-content: flex-end; }
+    .spot-dots { padding: 12px 18px 16px; }
+  }
+  /* 减少动态：不自动滚动，也不做位移，只留淡入淡出（点/箭头仍然可以翻页） */
+  @media (prefers-reduced-motion: reduce) {
+    .slide-body > * { transform: none !important; }
+    .slide.is-on .spot-progress { animation: none; transform: scaleX(1); }
+  }
+
+  /* ---------- 档期横幅：这一个月该推什么 ---------- */
+  .hero-head {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 20px; flex-wrap: wrap;
+  }
+  .kicker {
+    font-size: 12px; font-weight: 600; color: var(--ink-faint);
+    letter-spacing: .06em; text-transform: uppercase; font-variant-numeric: tabular-nums;
+  }
+  .hero-title {
+    font-size: clamp(22px, 2.6vw, 30px); font-weight: 600; letter-spacing: -.024em;
+    line-height: 1.2; margin: 7px 0 8px;
+  }
+  .hero-title .amp { color: var(--ink-faint); font-weight: 500; padding: 0 4px; }
+
+  /* 月份切换：一眼看出"板块内容跟着月份走" */
+  .months { display: flex; flex-wrap: wrap; gap: 6px; max-width: 360px; }
+  .months a {
+    padding: 5px 10px; border-radius: var(--r-pill); font-size: 12.5px;
+    color: var(--ink-soft); text-decoration: none; background: var(--card-sunken);
+    border: 1px solid var(--line); font-variant-numeric: tabular-nums;
+    transition: background .24s var(--ease), color .24s var(--ease),
+                border-color .24s var(--ease), transform .18s var(--ease);
+  }
+  .months a:hover { background: var(--accent-soft); color: var(--accent-deep); border-color: transparent; }
+  .months a:active { transform: scale(.95); }
+  .months a.on { background: var(--action-bg); color: var(--action-fg); border-color: transparent; font-weight: 600; }
+
+  .trend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+  .trend .stat {
+    display: inline-flex; align-items: center; gap: 7px; padding: 7px 13px;
+    border-radius: var(--r-pill); background: var(--card-sunken);
+    border: 1px solid var(--line); font-size: 12.5px; color: var(--ink-soft);
+  }
+  .trend .stat b { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+  /* ---------- 板块头 ---------- */
+  .sec-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .sec-head .lead { min-width: 0; flex: 1 1 320px; }
+  .sec-title { font-size: 19px; font-weight: 600; letter-spacing: -.016em; }
+  .sec-tag { font-size: 12.5px; color: var(--ink-faint); margin-top: 6px; line-height: 1.6; }
+  .chips-row { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 14px; }
+  .chips-row .tag { font-variant-numeric: tabular-nums; }
+
+  /* ---------- 推荐依据：买过的商品 ---------- */
+  .basis-head {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    margin: 18px 0 10px; font-size: 12.5px; color: var(--ink-faint);
+  }
+  .basis { display: flex; gap: 12px; overflow-x: auto; padding: 2px 2px 10px; }
+  .basis .b { flex: 0 0 auto; width: 84px; text-align: center; }
+  .basis img {
+    width: 84px; height: 84px; border-radius: 14px; object-fit: cover;
+    background: var(--card-sunken); border: 1px solid var(--line);
+  }
+  .basis .bn {
+    font-size: 11.5px; color: var(--ink-faint); margin-top: 7px; line-height: 1.4;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+
+  /* ---------- 商品卡片网格 ---------- */
+  .grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 14px; margin-top: 18px;
+  }
+  .pcard {
+    position: relative; display: flex; flex-direction: column; gap: 10px;
+    padding: 12px; border-radius: var(--r-block); background: var(--card-sunken);
+    border: 1px solid var(--line);
+    transition: background .26s var(--ease), border-color .26s var(--ease),
+                box-shadow .26s var(--ease), transform .18s var(--ease);
+  }
+  .pcard:hover {
+    background: var(--card); border-color: var(--line-strong);
+    box-shadow: var(--shadow-lift); transform: translateY(-2px);
+  }
+  .pcard .thumb {
+    width: 100%; aspect-ratio: 1 / 1; border-radius: 12px; object-fit: cover;
+    background: var(--card);
+  }
+  .pcard .pname {
+    font-size: 14px; font-weight: 600; line-height: 1.4; letter-spacing: -.006em;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden; min-height: 2.8em;
+  }
+  .pcard .why { font-size: 11.5px; color: var(--ink-faint); line-height: 1.45; }
+  .pcard .foot {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; margin-top: auto; white-space: nowrap;
+  }
+  .pcard .price { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .pcard .pmeta { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+  .pcard .fb { display: flex; gap: 5px; }
+  .fb button {
+    width: 30px; height: 30px; padding: 0; display: grid; place-items: center;
+    border-radius: 10px; background: var(--card); color: var(--ink-soft);
+    border: 1px solid var(--line); box-shadow: none;
+    transition: background .24s var(--ease), color .24s var(--ease),
+                border-color .24s var(--ease), transform .16s var(--ease);
+  }
+  .fb button:hover { background: var(--card-hover); color: var(--ink); border-color: var(--ink-faint); }
+  .fb button:active { transform: scale(.92); }
+  .fb button.on-like { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
+  .fb button.on-dislike { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
+  .pcard.liked { background: var(--ok-soft); border-color: transparent; }
+  .pcard.disliked { opacity: .45; }
+
+  .empty-note {
+    margin-top: 16px; padding: 16px 18px; border-radius: var(--r-block);
+    background: var(--card-sunken); border: 1px dashed var(--line-strong);
+    color: var(--ink-soft); font-size: 13.5px; line-height: 1.7;
+  }
+  .cta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 16px; }
+  .cta a.btn-link {
+    display: inline-flex; align-items: center; gap: 8px; padding: 11px 20px;
+    border-radius: var(--r-pill); background: var(--action-bg); color: var(--action-fg);
+    text-decoration: none; font-size: 14.5px; font-weight: 500; box-shadow: var(--shadow-action);
+    transition: background .24s var(--ease), transform .16s var(--ease);
+  }
+  .cta a.btn-link:hover { background: var(--action-bg-hi); }
+  .cta a.btn-link:active { transform: scale(.97); }
+  .cta a.btn-quiet {
+    color: var(--ink-soft); text-decoration: none; font-size: 14px;
+    padding: 11px 18px; border-radius: var(--r-pill); border: 1px solid var(--line-strong);
+    background: var(--card);
+  }
+  .cta a.btn-quiet:hover { background: var(--card-hover); }
+
+  /* ---------- Toast ---------- */
+  #toast {
+    position: fixed; left: 50%; transform: translateX(-50%) translateY(14px) scale(.98);
+    bottom: 34px; max-width: min(440px, calc(100vw - 32px));
+    background: rgba(28, 27, 24, .90); color: #f7f4ee;
+    -webkit-backdrop-filter: saturate(180%) blur(18px);
+    backdrop-filter: saturate(180%) blur(18px);
+    border: 1px solid rgba(247, 244, 238, .10);
+    padding: 13px 22px; border-radius: var(--r-pill);
+    font-size: 13.5px; letter-spacing: -.004em; text-align: center;
+    opacity: 0; pointer-events: none; z-index: 99;
+    box-shadow: 0 14px 38px rgba(28, 27, 24, .34);
+    transition: opacity .3s var(--ease), transform .38s var(--ease-spring);
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+  @media (prefers-color-scheme: dark) {
+    #toast { background: rgba(243, 239, 232, .94); color: #1c1b18; border-color: transparent; }
+  }
+  @media (max-width: 720px) {
+    .grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 11px; }
+    .months { max-width: none; }
+  }
+{% endblock %}
+
+{% block content %}
+  <h1>推荐首页</h1>
+  <div class="sub">
+    首页只回答两件事：<b>你买过什么</b>（在商品向量里找最像的邻居）和<b>这个月是什么档期</b>
+    （开学季、换季、大促）。最上面那条<b>滚动推荐</b>把两件事的头部结果轮流摆出来；
+    下面的板块会跟着月份变，右上角可以切换月份直接看效果。
+  </div>
+
+  {% for e in errors %}<div class="card err">{{ e }}</div>{% endfor %}
+
+  {# ================= 顶部滚动推荐：首页最显眼的位置 ================= #}
+  {% if data and data.carousel %}
+    {% set spot_ms = (data.carousel_interval_ms or 6000) %}
+    <section class="spot{% if data.carousel|length < 2 %} is-single{% endif %}" id="spot"
+             role="region" aria-roledescription="carousel" aria-label="滚动推荐"
+             data-interval="{{ spot_ms }}" style="--spot-dur: {{ spot_ms }}ms">
+      <div class="spot-head">
+        <div>
+          <div class="kicker">滚动推荐 · 每 {{ (spot_ms / 1000)|round(1) }} 秒自动换一条</div>
+          <h2 class="spot-title">此刻最该看的 <span class="n">{{ data.carousel|length }}</span> 件，轮着上镜</h2>
+        </div>
+        <div class="spot-nav">
+          <span class="spot-count"><b id="spot-index">1</b> / {{ data.carousel|length }}</span>
+          <button type="button" class="navbtn" data-dir="-1" aria-label="上一条推荐">
+            <svg class="ico ico-lg" aria-hidden="true"><use href="#i-chevron-left"></use></svg>
+          </button>
+          <button type="button" class="navbtn" data-dir="1" aria-label="下一条推荐">
+            <svg class="ico ico-lg" aria-hidden="true"><use href="#i-chevron-right"></use></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="spot-stage">
+        {% for s in data.carousel %}
+          <a class="slide{% if not s.image %} slide-fallback{% endif %}{% if loop.first %} is-on{% endif %}"
+             href="{{ s.href }}" data-slide="{{ loop.index0 }}"
+             aria-hidden="{{ 'false' if loop.first else 'true' }}"
+             {% if not loop.first %}tabindex="-1"{% endif %}
+             aria-label="{{ s.name }}，{{ s.category }}，¥{{ '%.2f'|format(s.price) }}">
+            {% if s.image %}
+              <img class="slide-img" src="{{ s.image }}" alt="{{ s.category }}类目照片"
+                   {% if loop.first %}fetchpriority="high"{% else %}loading="lazy"{% endif %} />
+            {% endif %}
+            <div class="slide-scrim"></div>
+            <div class="slide-body">
+              <div class="slide-badges">
+                <span class="sbadge {{ 'is-personal' if s.badge_kind == 'personal' else '' }}">{{ s.badge }}</span>
+                <span class="sbadge quiet">{{ s.category }}</span>
+                {% if s.owned %}<span class="sbadge quiet">已买过</span>{% endif %}
+              </div>
+              <div class="slide-name">{{ s.name }}</div>
+              <div class="slide-meta">
+                <span class="slide-price">¥{{ "%.2f"|format(s.price) }}</span>
+                <span>{{ s.users }} 人买过</span>
+                {% if s.season_lift %}<span>当月季节指数 ×{{ "%.1f"|format(s.season_lift) }}</span>{% endif %}
+                {% if s.origin_name %}<span>来自你买过的《{{ s.origin_name }}》</span>{% endif %}
+              </div>
+              <p class="slide-why">{{ s.reason_detail }}</p>
+              <span class="slide-cta">
+                看看和它相似的商品
+                <svg class="ico ico-lg" aria-hidden="true"><use href="#i-arrow-right"></use></svg>
+              </span>
+            </div>
+            {% if not s.image %}<img class="slide-thumb" src="{{ s.thumb }}" alt="" />{% endif %}
+            <div class="spot-progress"></div>
+          </a>
+        {% endfor %}
+      </div>
+
+      <div class="spot-dots" role="group" aria-label="选择要看的推荐">
+        {% for s in data.carousel %}
+          <button type="button" class="sdot{% if loop.first %} on{% endif %}" data-to="{{ loop.index0 }}"
+                  aria-label="第 {{ loop.index }} 条：{{ s.name }}"
+                  aria-current="{{ 'true' if loop.first else 'false' }}"></button>
+        {% endfor %}
+      </div>
+    </section>
+  {% endif %}
+
+  {# ================= 档期横幅 ================= #}
+  <div class="card">
+    <div class="hero-head">
+      <div style="min-width:0">
+        <div class="kicker">{{ data.today if data else '' }} · 当月档期</div>
+        <div class="hero-title">
+          {% if data %}
+            {% for t in data.themes %}{{ t.name }}{% if not loop.last %}<span class="amp">＋</span>{% endif %}{% endfor %}
+          {% else %}
+            {{ month }} 月
+          {% endif %}
+        </div>
+        <div class="muted" style="max-width:52ch">
+          {% if data and data.themes %}
+            {{ data.month_label }}的档期由「季节日历」给出（见 <code>src/seasonal.py</code>），
+            排序用当月实测的季节指数：某类目<strong>当月日均成交额 ÷ 它自己的全年日均</strong>，
+            大于 1 就是"这个类目在这个月比平时更旺"。
+          {% else %}
+            季节日历与季节性统计尚未加载，页面只显示错误信息。
+          {% endif %}
+        </div>
+      </div>
+      <div>
+        <div class="kicker" style="margin-bottom:8px">换个档期看看</div>
+        <div class="months">
+          {% for m in range(1, 13) %}
+            <a href="/home?month={{ m }}" class="{{ 'on' if m == month else '' }}">{{ m }}月</a>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+    {% if data and data.season_top_categories %}
+      <div class="trend">
+        <span class="stat" style="background:transparent;border-style:dashed">
+          {{ data.month_label }}季节指数最高的类目（数据实测）
+        </span>
+        {% for c in data.season_top_categories %}
+          <span class="stat"
+                title="{{ c.events }} 行成交记录 / 日均成交额 ¥{{ '%.0f'|format(c.daily_amount) }}{% if c.days_covered < 28 %}（该月只有 {{ c.days_covered }} 天有数据）{% endif %}">
+            {{ c.category }} <b>×{{ "%.1f"|format(c.lift) }}</b>
+          </span>
+        {% endfor %}
+      </div>
+    {% endif %}
+    {% if data and data.coverage.partial %}
+      <div class="muted" style="margin-top:12px">
+        注意：交易数据只覆盖到 {{ data.month_label }}的 {{ data.coverage.days_covered }} 天，
+        该月分母偏小，季节指数整体偏高（其余月份的覆盖天数完整）。
+      </div>
+    {% endif %}
+  </div>
+
+  {# ================= 未登录提示 ================= #}
+  {% if data and not data.logged_in %}
+    <div class="card">
+      <div class="sec-head">
+        <div class="lead">
+          <div class="sec-title">登录后可看到"基于你买过的商品"的推荐</div>
+          <div class="sec-tag">
+            档期板块是公共的，个性化板块需要知道你是谁：注册时关联一位演示客户，
+            系统会用他的历史购买初始化你的兴趣向量；之后点赞 / 点踩也会实时影响排序。
+          </div>
+        </div>
+      </div>
+      <div class="cta">
+        <a class="btn-link" href="/login?next=/home">登录 / 注册</a>
+        <a class="btn-quiet" href="/search">先去智能推荐逛逛</a>
+        {% if demo_customers %}
+          <span class="muted">
+            可关联的演示客户：{% for c in demo_customers[:3] %}{{ c.customer_id }}（{{ c.top_category }}）{% if not loop.last %}、{% endif %}{% endfor %} …
+          </span>
+        {% endif %}
+      </div>
+    </div>
+  {% endif %}
+
+  {# ================= 板块：购买相似 + 季节档期 ================= #}
+  {% if data %}
+    {% for s in data.sections %}
+      <div class="card" id="sec-{{ s.key }}">
+        <div class="sec-head">
+          <div class="lead">
+            <div class="sec-title">
+              {% if s.kind == 'similar' %}
+                猜你还会买
+              {% else %}
+                {{ s.title }}
+              {% endif %}
+            </div>
+            <div class="sec-tag">
+              {{ s.tagline }}
+              {% if s.kind == 'similar' and data.history_count %}
+                · 你的历史购买共 <b>{{ data.history_count }}</b> 件商品，
+                本板块用最近 {{ data.history_used }} 件做相似扩展，已剔除你买过的商品
+              {% endif %}
+            </div>
+          </div>
+          {% if s.kind == 'similar' and data.personalized %}
+            <span class="tag accent">已个性化</span>
+          {% elif s.kind == 'season' %}
+            <span class="tag">{{ data.month_label }}档期</span>
+          {% endif %}
+        </div>
+
+        {% if s.kind == 'similar' %}
+          {# ---- 推荐依据：把他买过的商品摆出来，推荐就有出处 ---- #}
+          {% if data.history_rows %}
+            <div class="basis-head">
+              <span>推荐依据 · 最近买过的商品</span>
+              {% if data.history_top_categories %}
+                <span class="muted">偏好类目：
+                  {% for c in data.history_top_categories %}{{ c.category }}（{{ c.count }}）{% if not loop.last %}、{% endif %}{% endfor %}
+                </span>
+              {% endif %}
+            </div>
+            <div class="basis">
+              {% for h in data.history_rows %}
+                <div class="b" title="{{ h.item_id }} · 买过 {{ h.orders }} 次 / {{ h.qty|round(0)|int }} 件 · 最后 {{ h.last_date }}">
+                  <img src="{{ h.image }}" alt="{{ h.category }}" loading="lazy" />
+                  <div class="bn">{{ h.name }}</div>
+                </div>
+              {% endfor %}
+            </div>
+          {% endif %}
+        {% else %}
+          {# ---- 档期类目的实测指数 ---- #}
+          {% if s.evidence_rows %}
+            <div class="chips-row">
+              <span class="tag quiet">档期类目当月实测指数</span>
+              {% for c in s.evidence_rows %}
+                <span class="tag {{ 'accent' if c.lift and c.lift > 1.05 else '' }}"
+                      title="{{ c.category }} 当月 {{ c.events }} 行成交记录{% if c.lift %}，季节指数 ×{{ '%.2f'|format(c.lift) }}{% else %}，样本不足（<30 行），不给季节信号{% endif %}">
+                  {{ c.category }}{% if c.lift %} ×{{ "%.2f"|format(c.lift) }}{% else %} —{% endif %}
+                </span>
+              {% endfor %}
+            </div>
+          {% endif %}
+          {% if s.note %}<div class="muted" style="margin-top:12px">{{ s.note }}</div>{% endif %}
+        {% endif %}
+
+        {% if s.rows %}
+          <div class="grid">
+            {% for r in s.rows %}
+              <article class="pcard {{ 'liked' if r.feedback == 'like' else '' }}"
+                       id="card-{{ s.key }}-{{ r.item_id }}" data-item="{{ r.item_id }}" data-name="{{ r.name }}">
+                <img class="thumb" src="{{ r.image }}" alt="{{ r.category }}" loading="lazy"
+                     title="类目示意图：{{ r.category }}" />
+                <div class="pname" title="{{ r.name }}">{{ r.name }}</div>
+                {% if s.kind == 'similar' and r.origin_name %}
+                  <div class="why" title="{{ r.reason_detail }}">像你买过的《{{ r.origin_name }}》</div>
+                {% else %}
+                  <div class="why" title="{{ r.reason_detail }}">{{ r.reason_detail }}</div>
+                {% endif %}
+                <div class="pmeta">
+                  <span class="tag">{{ r.category }}</span>
+                  {% if r.owned %}<span class="tag quiet" title="你已经买过，季节档期里仍然推它是因为它符合当前档期">已买过</span>{% endif %}
+                  <span class="muted" style="font-size:11.5px">{{ r.users }} 人买过</span>
+                </div>
+                <div class="foot">
+                  <span class="price">¥{{ "%.2f"|format(r.price) }}</span>
+                  {% if username %}
+                    <span class="fb" data-item="{{ r.item_id }}">
+                      <button type="button" data-action="like" aria-label="喜欢" title="喜欢"
+                              class="{{ 'on-like' if r.feedback == 'like' else '' }}">
+                        <svg class="ico ico-lg" aria-hidden="true"><use href="#i-thumb-up"></use></svg>
+                      </button>
+                      <button type="button" data-action="dislike" aria-label="不喜欢" title="不喜欢"
+                              class="{{ 'on-dislike' if r.feedback == 'dislike' else '' }}">
+                        <svg class="ico ico-lg" aria-hidden="true"><use href="#i-thumb-down"></use></svg>
+                      </button>
+                    </span>
+                  {% endif %}
+                </div>
+              </article>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="empty-note">
+            {{ s.empty }}
+            {% if s.kind == 'similar' and not data.logged_in %}
+              <a href="/login?next=/home">现在登录</a>
+            {% endif %}
+          </div>
+        {% endif %}
+      </div>
+    {% endfor %}
+
+    <div class="muted" style="margin:4px 2px 0">
+      {% if data.logged_in %}
+        首页两个板块的口径：板块一 = 最近 {{ data.history_used }} 件历史商品的向量近邻加权（越近买过权重越大）；
+        板块二 = 档期类目池 + 季节指数 + 热度{% if data.personalized %} + 你的兴趣向量{% endif %}。
+        已点赞 <b id="stat-liked">{{ feedback_stats.liked }}</b> 件，已点踩 <b id="stat-disliked">{{ feedback_stats.disliked }}</b> 件。
+      {% else %}
+        未登录时只展示公共的档期板块；登录并关联演示客户后，上面会出现"基于你买过的商品"的个性化板块。
+      {% endif %}
+    </div>
+  {% endif %}
+
+  <div id="toast"></div>
+{% endblock %}
+
+{% block script %}
+<script>
+/* ---------------- 顶部滚动推荐：轮播控制 ----------------
+   设计取舍（为什么不是"自己滚的 CSS marquee"）：
+   一次只亮一条、由用户随时能抢过来控制，所以用 class 切换 + CSS transition
+   （transition 能从中途重定向，keyframes 会从头播），JS 只负责"什么时候换"。
+   悬停 / 聚焦 / 切到后台 都暂停；系统开了"减少动态"就不自动滚动，只用点与箭头翻。
+*/
+(function () {
+  "use strict";
+  var spot = document.getElementById("spot");
+  if (!spot) return;
+  var slides = [].slice.call(spot.querySelectorAll(".slide"));
+  if (!slides.length) return;
+  var dots = [].slice.call(spot.querySelectorAll(".sdot"));
+  var stage = spot.querySelector(".spot-stage");
+  var counter = document.getElementById("spot-index");
+
+  var interval = parseInt(spot.getAttribute("data-interval"), 10);
+  if (!interval || interval < 2000) interval = 6000;
+  spot.style.setProperty("--spot-dur", interval + "ms");
+
+  var reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
+  var index = Math.max(0, slides.findIndex(function (s) { return s.classList.contains("is-on"); }));
+  var timer = null;
+  var deadline = 0;
+  var remaining = interval;
+  var hovering = false;
+  var focused = false;
+
+  function isRunning() {
+    return !hovering && !focused && !document.hidden && !reduce.matches;
+  }
+
+  function show(next) {
+    next = (next % slides.length + slides.length) % slides.length;
+    slides.forEach(function (slide, i) {
+      var on = i === next;
+      slide.classList.toggle("is-on", on);
+      slide.setAttribute("aria-hidden", on ? "false" : "true");
+      if (on) slide.removeAttribute("tabindex"); else slide.setAttribute("tabindex", "-1");
+    });
+    dots.forEach(function (dot, i) {
+      dot.classList.toggle("on", i === next);
+      dot.setAttribute("aria-current", i === next ? "true" : "false");
+    });
+    if (counter) counter.textContent = String(next + 1);
+    var bar = slides[next].querySelector(".spot-progress");
+    if (bar) {  // 让进度条重播：先摘掉动画、强制一次回流、再恢复
+      bar.style.animation = "none";
+      void bar.offsetWidth;
+      bar.style.animation = "";
+    }
+    index = next;
+  }
+
+  function arm() {  // 继续（或开始）计时
+    clearTimeout(timer);
+    timer = null;
+    if (!isRunning()) { spot.classList.add("is-paused"); return; }
+    spot.classList.remove("is-paused");
+    if (remaining < 400) remaining = interval;
+    deadline = Date.now() + remaining;
+    timer = setTimeout(function () {
+      remaining = interval;
+      show(index + 1);
+      arm();
+    }, remaining);
+  }
+
+  function hold() {  // 暂停：把"还剩多少"记下来，恢复时接着走
+    if (timer) {
+      remaining = Math.max(400, deadline - Date.now());
+      clearTimeout(timer);
+      timer = null;
+    }
+    spot.classList.add("is-paused");
+  }
+
+  function step(delta) {  // 手动翻页：一轮重新计时
+    show(index + delta);
+    remaining = interval;
+    arm();
+  }
+
+  spot.querySelectorAll(".navbtn").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      step(parseInt(btn.getAttribute("data-dir"), 10) || 1);
+    });
+  });
+  dots.forEach(function (dot) {
+    dot.addEventListener("click", function () {
+      show(parseInt(dot.getAttribute("data-to"), 10) || 0);
+      remaining = interval;
+      arm();
+    });
+  });
+
+  spot.addEventListener("mouseenter", function () { hovering = true; hold(); });
+  spot.addEventListener("mouseleave", function () { hovering = false; arm(); });
+  spot.addEventListener("focusin", function (event) {
+    // 只有键盘聚焦才暂停：鼠标点一下箭头也把轮播停死，会让人以为坏了
+    var keyboard = true;
+    try { keyboard = event.target.matches(":focus-visible"); } catch (err) { keyboard = true; }
+    if (keyboard) { focused = true; hold(); }
+  });
+  spot.addEventListener("focusout", function () {
+    if (focused) { focused = false; arm(); }
+  });
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) hold(); else arm();
+  });
+  if (reduce.addEventListener) {
+    reduce.addEventListener("change", function () { if (isRunning()) arm(); else hold(); });
+  }
+
+  spot.addEventListener("keydown", function (event) {
+    if (event.key === "ArrowLeft") { event.preventDefault(); step(-1); }
+    else if (event.key === "ArrowRight") { event.preventDefault(); step(1); }
+  });
+
+  if (stage) {  // 手机端左右滑动翻页；真的滑动了就吞掉这一次点击，避免误跳链接
+    var startX = 0, startY = 0, swiped = false;
+    stage.addEventListener("touchstart", function (event) {
+      if (event.touches.length !== 1) return;
+      startX = event.touches[0].clientX;
+      startY = event.touches[0].clientY;
+      swiped = false;
+    }, { passive: true });
+    stage.addEventListener("touchmove", function (event) {
+      if (event.touches.length !== 1) return;
+      var dx = event.touches[0].clientX - startX;
+      var dy = event.touches[0].clientY - startY;
+      if (!swiped && Math.abs(dx) > 46 && Math.abs(dx) > Math.abs(dy) * 1.4) {
+        swiped = true;
+        step(dx < 0 ? 1 : -1);
+      }
+    }, { passive: true });
+    stage.addEventListener("touchend", function (event) {
+      if (swiped) { event.preventDefault(); swiped = false; }
+    });
+  }
+
+  arm();
+})();
+
+(function () {
+  "use strict";
+  var toastEl = document.getElementById("toast");
+  if (!toastEl) return;
+  var timer = null;
+  function toast(text) {
+    toastEl.textContent = text;
+    toastEl.classList.add("show");
+    clearTimeout(timer);
+    timer = setTimeout(function () { toastEl.classList.remove("show"); }, 2600);
+  }
+
+  function paint(itemId, state) {
+    document.querySelectorAll('[data-item="' + itemId + '"]').forEach(function (node) {
+      if (!node.classList.contains("pcard")) return;
+      var box = node.querySelector(".fb");
+      if (box) {
+        box.querySelectorAll("button").forEach(function (btn) {
+          btn.classList.remove("on-like", "on-dislike");
+          if (state === "like" && btn.dataset.action === "like") btn.classList.add("on-like");
+          if (state === "dislike" && btn.dataset.action === "dislike") btn.classList.add("on-dislike");
+        });
+      }
+      node.classList.remove("liked", "disliked");
+      if (state === "like") node.classList.add("liked");
+      if (state === "dislike") node.classList.add("disliked");
+    });
+  }
+
+  document.querySelectorAll(".fb button").forEach(function (btn) {
+    btn.addEventListener("click", function (event) {
+      event.stopPropagation();
+      var itemId = btn.parentElement.dataset.item;
+      btn.disabled = true;
+      fetch("/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ item_id: itemId, action: btn.dataset.action }),
+      })
+        .then(function (resp) { return resp.json().then(function (d) { return { ok: resp.ok, data: d }; }); })
+        .then(function (r) {
+          if (!r.ok) { toast(r.data.error || "操作失败"); return; }
+          paint(itemId, r.data.state);
+          var l = document.getElementById("stat-liked"), d = document.getElementById("stat-disliked");
+          if (l) l.textContent = r.data.stats.liked;
+          if (d) d.textContent = r.data.stats.disliked;
+          var label = r.data.state === "like" ? "喜欢" : "不喜欢";
+          toast(r.data.state
+            ? "已记录「" + label + "」，刷新首页即可看到重排结果"
+            : "已取消该反馈");
+        })
+        .catch(function (err) { toast("网络错误：" + err.message); })
+        .finally(function () { btn.disabled = false; });
+    });
+  });
+})();
+</script>
+{% endblock %}
