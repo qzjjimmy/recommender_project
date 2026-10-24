@@ -46,6 +46,7 @@ sys.path.insert(0, str(ROOT))
 import pandas as pd
 from flask import (
     Flask,
+    g,
     jsonify,
     make_response,
     redirect,
@@ -66,11 +67,20 @@ from src import user_store
 from src import visual_intent as vi
 from src.home_recommend import HomeRecommender
 from src.item2vec import load_item2vec
+from src.orchestrator import Orchestrator
+from src.protocol import (
+    ContractError,
+    InteractionEvent,
+    contract_error_payload,
+    new_trace_id,
+    utc_now,
+)
+from src.session_context import SessionStore
 from src.vector_index import ItemVectorIndex
 
 app = Flask(__name__)
 app.config["TEMPLATES_AUTO_RELOAD"] = True
-app.config["JSON_AS_ASCII"] = False
+app.json.ensure_ascii = False
 # 语音/图片是二进制上传，给一个明确上限（约 24MB），避免超大请求拖垮进程
 app.config["MAX_CONTENT_LENGTH"] = 24 * 1024 * 1024
 
@@ -126,6 +136,8 @@ PROFILE_INDEX: dict[str, dict] = {}  # 商品ID → 名称/类目/均价/热度�
 LOAD_ERROR: str | None = None
 HOME: HomeRecommender | None = None  # 推荐首页（购买历史 + 季节统计，首次访问 /home 按需加载）
 HOME_ERROR: str | None = None
+SESSION_STORE = SessionStore()
+ORCHESTRATOR: Orchestrator | None = None
 
 # 项目二多模态桥接服务（本地 ASR / 手势 / 视觉 / 大模型 / TTS）。
 # 进程内单例：共享健康探测缓存，未启动时所有调用都会降级，不影响页面其它功能。
@@ -233,6 +245,7 @@ def banner_url(category: str) -> str:
 def load_resources() -> None:
     """一次性加载索引、商品表与智能推荐器；失败时记录原因而不让服务崩溃。"""
     global INDEX, NAMES, CATEGORIES, DEMO_IDS, SEARCHER, DEMO_CUSTOMERS, LOAD_ERROR
+    global ORCHESTRATOR
     try:
         user_store.init_db(PATHS["user_db"])
         fb.init_db(PATHS["feedback_db"])
@@ -261,14 +274,97 @@ def load_resources() -> None:
                 for row in SEARCHER.profile.itertuples(index=False)
             }
         )
+        ORCHESTRATOR = Orchestrator(SEARCHER, SESSION_STORE)
         LOAD_ERROR = None
     except Exception as exc:  # noqa: BLE001 - 需要把原因原样报给调用方
         INDEX = None
         SEARCHER = None
+        ORCHESTRATOR = None
         LOAD_ERROR = f"{type(exc).__name__}: {exc}"
 
 
 load_resources()
+
+
+# ------------------------------------------------------------- 请求追踪 / 会话
+@app.before_request
+def attach_trace_id():
+    """所有 API 与反馈请求都获得同一个可向下游传递的 trace。"""
+    if request.path.startswith("/api/") or request.path.startswith("/feedback"):
+        candidate = str(request.headers.get("X-Trace-ID") or "").strip()
+        try:
+            from src.protocol import _validate_trace_id
+
+            _validate_trace_id(candidate)
+        except ContractError:
+            candidate = ""
+        g.trace_id = candidate or new_trace_id()
+
+
+@app.after_request
+def expose_trace_id(response):
+    trace_id = getattr(g, "trace_id", "")
+    if trace_id:
+        response.headers["X-Trace-ID"] = trace_id
+    return response
+
+
+def trace_id() -> str:
+    """当前请求的 trace；后台脚本调用辅助函数时生成新值。"""
+    return str(getattr(g, "trace_id", "") or new_trace_id())
+
+
+def current_session_id() -> str:
+    """Flask 登录会话内的稳定 session_id，不随单次查询变化。"""
+    sid = str(session.get("context_session_id") or "").strip()
+    if not sid:
+        sid = secrets.token_hex(16)
+        session["context_session_id"] = sid
+    return sid
+
+
+def session_context():
+    username = str(session.get("username") or "")
+    return SESSION_STORE.get(username, current_session_id())
+
+
+def persistent_feedback(username: str) -> dict[str, str]:
+    """长期偏好只保留点赞；点踩与浏览由 SessionContext 隔离。"""
+    return {
+        str(item): "like"
+        for item, action in fb.get_feedback(PATHS["feedback_db"], username).items()
+        if action == "like"
+    }
+
+
+def effective_feedback(username: str) -> dict[str, str]:
+    context = SESSION_STORE.get(username, current_session_id())
+    return context.effective_feedback(persistent_feedback(username))
+
+
+def feedback_stats(username: str) -> dict[str, Any]:
+    return fb.summarize(effective_feedback(username))
+
+
+def api_error(
+    message: str,
+    status: int,
+    *,
+    error_code: str,
+    hint: str = "",
+    detail: Any = None,
+) -> tuple[Any, int]:
+    payload: dict[str, Any] = {
+        "error": message,
+        "message": message,
+        "error_code": error_code,
+        "trace_id": trace_id(),
+    }
+    if hint:
+        payload["hint"] = hint
+    if detail is not None:
+        payload["detail"] = detail
+    return jsonify(payload), status
 
 
 # ------------------------------------------------------------------ 辅助
@@ -291,14 +387,20 @@ def nav(active: str = "") -> dict:
 
 
 def disliked_items(username: str) -> list[dict]:
-    """当前用户点过「不喜欢」的商品，最近点的排在前面。
+    """当前**会话**点过「不喜欢」的商品，最近操作的排在前面。
 
     商品名 / 类目 / 价格取自智能推荐的商品画像；画像里没有的商品（例如后来才被
     过滤掉的编码）就退回商品主数据，保证列表里任何一条都能显示得出来。
     """
     if not username:
         return []
-    records = fb.list_feedback(PATHS["feedback_db"], username, action="dislike")
+    context = SESSION_STORE.get(username, current_session_id())
+    records = [
+        {"item_id": item_id, "updated_at": ""}
+        for item_id, action in context.session_feedback.items()
+        if action == "dislike"
+    ]
+    records.reverse()
     items: list[dict] = []
     for record in records:
         item_id = record["item_id"]
@@ -336,7 +438,7 @@ def api_login_required(view):
     @functools.wraps(view)
     def wrapper(*args, **kwargs):
         if not session.get("username"):
-            return jsonify({"error": "请先登录"}), 401
+            return api_error("请先登录", 401, error_code="AUTH_REQUIRED")
         return view(*args, **kwargs)
 
     return wrapper
@@ -567,8 +669,37 @@ def search_page():
     if query and SEARCHER is not None:
         try:
             # 一次多排一些（最多 MAX_RANKED 条），页面上再按页切
-            full = SEARCHER.search(
-                query, username=user["username"], top_n=MAX_RANKED, force_llm=force_llm
+            source = "text"
+            if request.args.get("from") == "voice":
+                source = "voice"
+            elif from_vision:
+                source = "vision"
+            event = InteractionEvent(
+                trace_id=trace_id(),
+                user_id=user["username"],
+                session_id=current_session_id(),
+                timestamp=utc_now(),
+                source=source,
+                payload={
+                    "text": query,
+                    "reset_context": request.args.get("continue") != "1",
+                },
+            )
+            full = (
+                ORCHESTRATOR.handle_event(
+                    event,
+                    top_k=MAX_RANKED,
+                    force_llm=force_llm,
+                    persistent_feedback=persistent_feedback(user["username"]),
+                )
+                if ORCHESTRATOR is not None
+                else SEARCHER.search(
+                    query,
+                    username=user["username"],
+                    top_n=MAX_RANKED,
+                    force_llm=force_llm,
+                    feedback_map=effective_feedback(user["username"]),
+                )
             )
             for row in full["results"]:
                 row["image"] = image_url(row["item_id"], row.get("category", ""))
@@ -587,7 +718,7 @@ def search_page():
         except Exception as exc:  # noqa: BLE001
             error = f"{type(exc).__name__}: {exc}"
 
-    stats = fb.summarize(fb.get_feedback(PATHS["feedback_db"], user["username"]))
+    stats = feedback_stats(user["username"])
     return render_template(
         "search.html",
         **nav("search"),
@@ -621,27 +752,56 @@ def search_page():
 @app.post("/feedback")
 @api_login_required
 def feedback_api():
-    """记录点赞 / 点踩。重复点同一个动作表示取消。"""
+    """记录点赞、点踩或浏览；负反馈与浏览只影响当前会话。"""
     payload = request.get_json(silent=True) or {}
     item_id = str(payload.get("item_id") or "").strip()
     action = str(payload.get("action") or "").strip()
 
     if not item_id:
-        return jsonify({"error": "缺少 item_id"}), 400
-    if action not in fb.ACTIONS:
-        return jsonify({"error": f"action 必须是 {fb.ACTIONS} 之一"}), 400
+        return api_error("缺少 item_id", 400, error_code="MISSING_ITEM_ID")
+    if action not in (*fb.ACTIONS, "browse"):
+        return api_error(
+            f"action 必须是 {fb.ACTIONS + ('browse',)} 之一",
+            400,
+            error_code="INVALID_ACTION",
+        )
 
     username = session["username"]
     try:
-        state = fb.set_feedback(PATHS["feedback_db"], username, item_id, action)
+        context = SESSION_STORE.get(username, current_session_id())
+        if action == "browse":
+            context.record_browse(item_id)
+            state = "browse"
+        else:
+            state = context.set_feedback(
+                item_id,
+                action,
+                persistent_feedback=persistent_feedback(username),
+            )
+            # 用户级库只保留点赞。先删除旧值，再按最终会话状态写入，
+            # 避免“会话已有点赞 + 数据库也有点赞”时被 set_feedback 再次翻转。
+            fb.clear_feedback(PATHS["feedback_db"], username, item_id)
+            if state == "like":
+                fb.set_feedback(PATHS["feedback_db"], username, item_id, "like")
     except Exception as exc:  # noqa: BLE001
-        return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 500
+        return api_error(
+            f"{type(exc).__name__}: {exc}",
+            500,
+            error_code="FEEDBACK_WRITE_FAILED",
+        )
 
-    stats = fb.summarize(fb.get_feedback(PATHS["feedback_db"], username))
-    label = {"like": "喜欢", "dislike": "不喜欢"}.get(state or "", "")
-    hint = f"已记录「{label}」，下次搜索会按你的反馈重新排序" if state else "已取消该反馈"
+    stats = feedback_stats(username)
+    label = {"like": "喜欢", "dislike": "不喜欢", "browse": "浏览"}.get(
+        state or "", ""
+    )
+    hint = (
+        f"已记录当前会话的「{label}」"
+        if state
+        else "已取消该反馈"
+    )
     return jsonify(
         {
+            "trace_id": trace_id(),
             "item_id": item_id,
             "state": state,
             "item_name": NAMES.get(item_id, catalog.UNKNOWN_NAME),
@@ -661,21 +821,37 @@ def feedback_clear_api():
     payload = request.get_json(silent=True) or {}
     action = str(payload.get("action") or "dislike").strip()
     if action not in ("dislike", "like", "all"):
-        return jsonify({"error": "action 必须是 dislike / like / all 之一"}), 400
+        return api_error(
+            "action 必须是 dislike / like / all 之一",
+            400,
+            error_code="INVALID_ACTION",
+        )
 
     username = session["username"]
     try:
+        context = SESSION_STORE.get(username, current_session_id())
         if action == "all":
-            removed = fb.clear_feedback(PATHS["feedback_db"], username)
+            session_removed = context.clear_feedback("like") + context.clear_feedback("dislike")
+            db_removed = fb.clear_feedback(PATHS["feedback_db"], username)
+            removed = session_removed + db_removed
+        elif action == "dislike":
+            removed = context.clear_feedback("dislike")
         else:
+            session_removed = context.clear_feedback("like")
             removed = fb.clear_feedback_by_action(PATHS["feedback_db"], username, action)
+            removed += session_removed
     except Exception as exc:  # noqa: BLE001 - 把失败原因原样报给页面
-        return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 500
+        return api_error(
+            f"{type(exc).__name__}: {exc}",
+            500,
+            error_code="FEEDBACK_CLEAR_FAILED",
+        )
 
-    stats = fb.summarize(fb.get_feedback(PATHS["feedback_db"], username))
+    stats = feedback_stats(username)
     label = {"dislike": "不喜欢", "like": "喜欢", "all": "全部"}[action]
     return jsonify(
         {
+            "trace_id": trace_id(),
             "action": action,
             "removed": removed,
             "stats": stats,
@@ -689,7 +865,58 @@ def feedback_clear_api():
 def api_disliked():
     """当前用户"不喜欢"的商品列表（JSON）。"""
     items = disliked_items(session["username"])
-    return jsonify({"count": len(items), "results": items})
+    return jsonify(
+        {"trace_id": trace_id(), "count": len(items), "results": items}
+    )
+
+
+@app.get("/api/session/context")
+@api_login_required
+def api_session_context():
+    """返回当前会话的意图、槽位、证据、冲突和短期反馈。"""
+    context = SESSION_STORE.get(session["username"], current_session_id())
+    payload = context.to_dict()
+    payload["trace_id"] = trace_id()
+    return jsonify(payload)
+
+
+@app.post("/api/session/undo")
+@api_login_required
+def api_session_undo():
+    context = SESSION_STORE.get(session["username"], current_session_id())
+    undone = context.undo()
+    payload = context.to_dict()
+    payload.update({"trace_id": trace_id(), "undone": undone})
+    return jsonify(payload)
+
+
+@app.post("/api/session/clear")
+@api_login_required
+def api_session_clear():
+    context = SESSION_STORE.get(session["username"], current_session_id())
+    context.clear()
+    payload = context.to_dict()
+    payload["trace_id"] = trace_id()
+    return jsonify(payload)
+
+
+@app.post("/api/browse")
+@api_login_required
+def api_browse():
+    """记录继续浏览；只进入当前会话，不写用户级数据库。"""
+    payload = request.get_json(silent=True) or {}
+    item_id = str(payload.get("item_id") or "").strip()
+    if not item_id:
+        return api_error("缺少 item_id", 400, error_code="MISSING_ITEM_ID")
+    context = SESSION_STORE.get(session["username"], current_session_id())
+    context.record_browse(item_id)
+    return jsonify(
+        {
+            "trace_id": trace_id(),
+            "item_id": item_id,
+            "browse_items": list(context.browse_items),
+        }
+    )
 
 
 # ------------------------------------------------- 项目二多模态桥接（语音/手势/播报）
@@ -700,11 +927,15 @@ def _multimodal_error(exc: Exception, *, fallback: str = "builtin"):
     桥接服务自己拒绝了请求（``BridgeError``）→ 原样透传它的状态码。
     两种情况页面都不会 500。
     """
+    effective_trace = str(getattr(exc, "trace_id", "") or trace_id())
     if isinstance(exc, mmc.BridgeUnavailable):
         return (
             jsonify(
                 {
                     "error": str(exc),
+                    "message": str(exc),
+                    "error_code": "MULTIMODAL_UNAVAILABLE",
+                    "trace_id": effective_trace,
                     "fallback": fallback,
                     "hint": (
                         "多模态桥接服务未启动；文字与语音推荐仍可正常使用。"
@@ -720,6 +951,9 @@ def _multimodal_error(exc: Exception, *, fallback: str = "builtin"):
         jsonify(
             {
                 "error": str(exc),
+                "message": str(exc),
+                "error_code": "MULTIMODAL_REQUEST_FAILED",
+                "trace_id": effective_trace,
                 "hint": (
                     "视觉服务未返回有效结果；可继续使用文字或语音搜索。"
                     if text_only
@@ -756,14 +990,19 @@ def api_voice():
     """本地语音识别（项目二 SenseVoiceSmall）：收 WAV 字节 → 返回识别文本。"""
     audio = _binary_body()
     if len(audio) < 128:
-        return jsonify({"error": "没有收到有效的音频数据（WAV 太小或为空）"}), 400
+        return api_error(
+            "没有收到有效的音频数据（WAV 太小或为空）",
+            400,
+            error_code="INVALID_AUDIO",
+        )
     try:
-        result = MULTIMODAL.transcribe(audio)
+        result = MULTIMODAL.transcribe(audio, trace_id=trace_id())
     except (mmc.BridgeUnavailable, mmc.BridgeError) as exc:
         return _multimodal_error(exc)
     text = str(result.get("text") or "").strip()
     return jsonify(
         {
+            "trace_id": trace_id(),
             "text": text,
             "engine": result.get("engine", "local-asr"),
             "elapsed_ms": result.get("elapsed_ms", 0),
@@ -778,12 +1017,13 @@ def api_gesture():
     """MediaPipe 手势单帧判定（项目二）：收 JPEG 字节 → 返回手势名与中文标签。"""
     image = _binary_body()
     if not image:
-        return jsonify({"error": "没有收到图像数据"}), 400
+        return api_error("没有收到图像数据", 400, error_code="MISSING_IMAGE")
     try:
-        result = MULTIMODAL.gesture(image)
+        result = MULTIMODAL.gesture(image, trace_id=trace_id())
     except (mmc.BridgeUnavailable, mmc.BridgeError) as exc:
         return _multimodal_error(exc)
     result["engine"] = "mediapipe"
+    result["trace_id"] = trace_id()
     return jsonify(result)
 
 
@@ -794,14 +1034,15 @@ def api_tts():
     payload = request.get_json(silent=True) or {}
     text = str(payload.get("text") or "").strip()
     if not text:
-        return jsonify({"error": "缺少 text"}), 400
+        return api_error("缺少 text", 400, error_code="MISSING_TEXT")
     try:
-        audio = MULTIMODAL.tts(text)
+        audio = MULTIMODAL.tts(text, trace_id=trace_id())
     except (mmc.BridgeUnavailable, mmc.BridgeError) as exc:
         return _multimodal_error(exc)
     response = make_response(audio)
     response.headers["Content-Type"] = "audio/mpeg"
     response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Trace-ID"] = trace_id()
     return response
 
 
@@ -810,49 +1051,53 @@ def api_tts():
 def api_vision_analyze():
     """图片 → 可见场景与类目线索 → 可编辑的推荐查询（不自动搜索）。"""
     if SEARCHER is None:
-        return jsonify(
-            {"error": "智能推荐未就绪", "hint": "请先准备商品画像与向量索引"}
-        ), 503
+        return api_error(
+            "智能推荐未就绪",
+            503,
+            error_code="RECOMMENDER_NOT_READY",
+            hint="请先准备商品画像与向量索引",
+        )
 
     declared = request.content_length
     if declared is not None and declared > MAX_VISION_UPLOAD_BYTES + 128 * 1024:
-        return jsonify(
-            {
-                "error": "图片过大",
-                "hint": f"请上传不超过 {MAX_VISION_UPLOAD_BYTES // 1024 // 1024}MB 的图片",
-            }
-        ), 413
+        return api_error(
+            "图片过大",
+            413,
+            error_code="IMAGE_TOO_LARGE",
+            hint=f"请上传不超过 {MAX_VISION_UPLOAD_BYTES // 1024 // 1024}MB 的图片",
+        )
 
     image = _binary_body()
     if not image:
-        return jsonify(
-            {
-                "error": "没有收到图片",
-                "hint": "请使用 multipart/form-data 上传字段 image",
-            }
-        ), 400
+        return api_error(
+            "没有收到图片",
+            400,
+            error_code="MISSING_IMAGE",
+            hint="请使用 multipart/form-data 上传字段 image",
+        )
     if len(image) > MAX_VISION_UPLOAD_BYTES:
-        return jsonify(
-            {
-                "error": "图片过大",
-                "hint": f"请上传不超过 {MAX_VISION_UPLOAD_BYTES // 1024 // 1024}MB 的图片",
-            }
-        ), 413
+        return api_error(
+            "图片过大",
+            413,
+            error_code="IMAGE_TOO_LARGE",
+            hint=f"请上传不超过 {MAX_VISION_UPLOAD_BYTES // 1024 // 1024}MB 的图片",
+        )
     if not (
         image.startswith(b"\xff\xd8\xff")
         or image.startswith(b"\x89PNG\r\n\x1a\n")
     ):
-        return jsonify(
-            {
-                "error": "图片格式不支持",
-                "hint": "请上传 JPEG 或 PNG 图片",
-            }
-        ), 400
+        return api_error(
+            "图片格式不支持",
+            400,
+            error_code="INVALID_IMAGE",
+            hint="请上传 JPEG 或 PNG 图片",
+        )
 
     try:
         raw = MULTIMODAL.vision(
             image,
             categories=list(SEARCHER.categories),
+            trace_id=trace_id(),
         )
     except (mmc.BridgeUnavailable, mmc.BridgeError) as exc:
         return _multimodal_error(exc, fallback="text-only")
@@ -865,6 +1110,7 @@ def api_vision_analyze():
         model_name = str(MULTIMODAL.status().get("vision_model", ""))
     return jsonify(
         {
+            "trace_id": trace_id(),
             "vision": analysis,
             "suggested_query": suggested_query,
             "has_visual_terms": vi.has_visual_terms(analysis),
@@ -979,24 +1225,61 @@ def similar():
 def api_search():
     """智能推荐的 JSON 版本，便于外部系统（如项目三）调用。"""
     if SEARCHER is None:
-        return jsonify({"error": "智能推荐未就绪", "detail": LOAD_ERROR}), 503
+        return api_error(
+            "智能推荐未就绪",
+            503,
+            error_code="RECOMMENDER_NOT_READY",
+            detail=LOAD_ERROR,
+        )
 
     query = (request.args.get("q") or "").strip()
     if not query:
-        return jsonify({"error": "缺少参数 q", "example": "/api/search?q=100块以内的家居装饰"}), 400
+        return api_error(
+            "缺少参数 q",
+            400,
+            error_code="MISSING_QUERY",
+            hint="示例：/api/search?q=100块以内的家居装饰",
+        )
 
     try:
         top_n = int(request.args.get("top_n", MAX_RANKED))
     except (TypeError, ValueError):
-        return jsonify({"error": "top_n 必须是整数"}), 400
+        return api_error("top_n 必须是整数", 400, error_code="INVALID_TOP_N")
+    if not 1 <= top_n <= 100:
+        return api_error("top_n 必须在 1~100 之间", 400, error_code="INVALID_TOP_N")
 
     force_llm = (request.args.get("llm") or "").strip().lower() in ("1", "true", "yes", "on")
-    result = SEARCHER.search(
-        query,
-        username=session["username"],
-        top_n=max(1, min(top_n, 100)),
-        force_llm=force_llm,
+    username = session["username"]
+    event = InteractionEvent(
+        trace_id=trace_id(),
+        user_id=username,
+        session_id=current_session_id(),
+        timestamp=utc_now(),
+        source="text",
+        payload={
+            "text": query,
+            "reset_context": request.args.get("continue") != "1",
+        },
     )
+    try:
+        result = (
+            ORCHESTRATOR.handle_event(
+                event,
+                top_k=top_n,
+                force_llm=force_llm,
+                persistent_feedback=persistent_feedback(username),
+            )
+            if ORCHESTRATOR is not None
+            else SEARCHER.search(
+                query,
+                username=username,
+                top_n=top_n,
+                force_llm=force_llm,
+                feedback_map=effective_feedback(username),
+            )
+        )
+    except ContractError as exc:
+        return jsonify(contract_error_payload(exc, trace_id=trace_id())), 400
     for row in result["results"]:
         row["image"] = image_url(row["item_id"], row.get("category", ""))
     return jsonify(result)
@@ -1008,6 +1291,9 @@ def handle_404(_):
         jsonify(
             {
                 "error": "接口不存在",
+                "message": "接口不存在",
+                "error_code": "NOT_FOUND",
+                "trace_id": trace_id(),
                 "hint": (
                     "可用页面/接口：/home 、/ 、/search 、/login 、/health 、/similar 、"
                     "/api/home 、/api/items 、/api/search 、/api/disliked 、/feedback 、"

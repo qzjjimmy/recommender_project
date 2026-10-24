@@ -1,6 +1,6 @@
-# 电商商品智能推荐系统
+# 多模态个性化推荐助手
 
-这是课程项目一的推荐系统代码，并集成了项目二的多模态助手。项目二保持独立目录和运行环境，通过本地 HTTP 桥接服务与推荐系统通信。
+这是课程项目三的整合代码：复用项目一的推荐系统与项目二的多模态助手。项目二保持独立目录和运行环境，通过本地 HTTP 桥接服务与推荐系统通信。`integrated_ai_project` 脚手架不是运行依赖。
 
 ## 一键启动（推荐）
 
@@ -79,8 +79,46 @@ python bridge_server.py
 ## 文档
 
 - [文档索引](docs/README.md)
+- [系统架构与协议](docs/architecture.md)
+- [部署与风险说明](docs/deployment_and_risks.md)
+- [演示与验收用例](docs/demo_cases.md)
 - [完整实践文档](docs/guides/推荐系统实践_完整文档.md)
 - [目录规范](目录规范.md)
+
+## 项目三验收
+
+六个阶段都在现有代码上提供可重跑入口，并在 `outputs/` 落盘结构化证据：
+
+```bash
+python scripts/01_contract_test.py
+python scripts/02_context_test.py
+python scripts/03_orchestrator_demo.py
+python scripts/04_explanation_test.py
+python scripts/05_feedback_ab.py
+python scripts/06_e2e_acceptance.py
+python scripts/19_build_submission.py
+```
+
+推荐 API 会生成或接收 `X-Trace-ID`，并让桥接服务原样返回。文字、语音、视觉三类入口
+最终进入统一 `InteractionEvent` 和 Orchestrator。推荐结果包含多路召回来源和 EvidencePack；
+无证据时明确降级，不生成无法核验的事实。
+
+点赞作为长期偏好保存；点踩和继续浏览只在当前 `session_id` 生效。当前会话摘要可通过
+`GET /api/session/context` 查看，撤销和清理分别使用
+`POST /api/session/undo`、`POST /api/session/clear`。
+
+根项目测试使用独立配置，避免嵌套项目的同名 `src` 包参与发现：
+
+```bash
+python -m pytest -q
+```
+
+多模态桥接测试应在 `multimodal_ai` 环境运行：
+
+```bash
+cd multimodal_ai_project1
+python -m unittest discover -s tests -v
+```
 
 ## 数据与密钥
 

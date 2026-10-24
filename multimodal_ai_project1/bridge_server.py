@@ -487,19 +487,34 @@ class BridgeHandler(BaseHTTPRequestHandler):
     # -------------------------------------------------------- 基础工具
     def log_message(self, fmt: str, *args) -> None:  # noqa: A003
         if getattr(self.server, "verbose", False):
-            sys.stderr.write("[桥接] %s - %s\n" % (self.address_string(), fmt % args))
+            trace_id = self._trace_id()
+            prefix = f" trace={trace_id}" if trace_id else ""
+            sys.stderr.write(
+                "[桥接] %s -%s %s\n" % (self.address_string(), prefix, fmt % args)
+            )
+
+    def _trace_id(self) -> str:
+        """读取跨服务 trace；没有时返回空串，兼容旧调用。"""
+        return str(self.headers.get("X-Trace-ID") or "").strip()[:128]
 
     def _send_bytes(self, data: bytes, content_type: str, status: int = 200) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
+        trace_id = self._trace_id()
+        if trace_id:
+            self.send_header("X-Trace-ID", trace_id)
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(data)
 
     def _send_json(self, payload: dict, status: int = 200) -> None:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        body_data = dict(payload)
+        trace_id = self._trace_id()
+        if trace_id:
+            body_data.setdefault("trace_id", trace_id)
+        body = json.dumps(body_data, ensure_ascii=False).encode("utf-8")
         self._send_bytes(body, "application/json; charset=utf-8", status)
 
     def _read_body(self) -> bytes:
@@ -526,9 +541,18 @@ class BridgeHandler(BaseHTTPRequestHandler):
             raise ValueError("请求体必须是 JSON 对象")
         return data
 
-    def _fail(self, message: str, status: int = 400) -> None:
+    def _fail(
+        self, message: str, status: int = 400, *, error_code: str | None = None
+    ) -> None:
         self.close_connection = True
-        self._send_json({"error": message}, status)
+        self._send_json(
+            {
+                "error": message,
+                "message": message,
+                "error_code": error_code or f"BRIDGE_{status}",
+            },
+            status,
+        )
 
     # ---------------------------------------------------------- 健康检查
     def _health(self) -> dict:
@@ -612,10 +636,14 @@ class BridgeHandler(BaseHTTPRequestHandler):
             else:
                 self._fail(f"未知路径：{path}", 404)
         except ValueError as exc:
-            self._fail(str(exc), 400)
+            self._fail(str(exc), 400, error_code="INVALID_INPUT")
         except Exception as exc:  # noqa: BLE001 - 任何异常都转成 JSON，不让进程崩
             traceback.print_exc()
-            self._fail(f"{type(exc).__name__}: {exc}", 500)
+            self._fail(
+                f"{type(exc).__name__}: {exc}",
+                500,
+                error_code="BRIDGE_INTERNAL_ERROR",
+            )
 
     # ------------------------------------------------------- 各能力处理器
     def _post_asr(self) -> None:
@@ -625,11 +653,15 @@ class BridgeHandler(BaseHTTPRequestHandler):
             payload = self._read_json()
             b64 = str(payload.get("audio_b64") or "")
             if not b64:
-                return self._fail("JSON 模式下必须提供 audio_b64", 400)
+                return self._fail(
+                    "JSON 模式下必须提供 audio_b64", 400, error_code="MISSING_AUDIO"
+                )
             try:
                 wav = base64.b64decode(b64)
             except Exception as exc:  # noqa: BLE001
-                return self._fail(f"audio_b64 解码失败：{exc}", 400)
+                return self._fail(
+                    f"audio_b64 解码失败：{exc}", 400, error_code="INVALID_AUDIO"
+                )
             language = str(payload.get("language") or language)
         else:
             wav = self._read_body()
@@ -646,22 +678,29 @@ class BridgeHandler(BaseHTTPRequestHandler):
     def _post_vision(self) -> None:
         content_type = (self.headers.get("Content-Type") or "").lower()
         if "application/json" not in content_type:
-            return self._fail(
+                return self._fail(
                 "视觉接口需要 application/json，字段为 image_b64 和可选 categories",
                 400,
+                    error_code="INVALID_CONTENT_TYPE",
             )
         payload = self._read_json()
         b64 = str(payload.get("image_b64") or "")
         if not b64:
-            return self._fail("缺少 image_b64", 400)
+            return self._fail(
+                "缺少 image_b64", 400, error_code="MISSING_IMAGE"
+            )
         try:
             image = base64.b64decode(b64, validate=True)
         except Exception as exc:  # noqa: BLE001
-            return self._fail(f"image_b64 解码失败：{exc}", 400)
+            return self._fail(
+                f"image_b64 解码失败：{exc}", 400, error_code="INVALID_IMAGE"
+            )
 
         raw_categories = payload.get("categories") or []
         if not isinstance(raw_categories, list):
-            return self._fail("categories 必须是数组", 400)
+            return self._fail(
+                "categories 必须是数组", 400, error_code="INVALID_CATEGORIES"
+            )
         categories = [
             str(value).strip()[:80]
             for value in raw_categories[:60]
@@ -682,7 +721,9 @@ class BridgeHandler(BaseHTTPRequestHandler):
         payload = self._read_json()
         messages = payload.get("messages") or []
         if not isinstance(messages, list):
-            return self._fail("messages 必须是数组", 400)
+            return self._fail(
+                "messages 必须是数组", 400, error_code="INVALID_MESSAGES"
+            )
         model = payload.get("model") or None
         try:
             temperature = float(payload.get("temperature", 0.2))

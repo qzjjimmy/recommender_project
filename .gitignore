@@ -40,4 +40,8 @@ docs/diagrams/
 # 其它
 .DS_Store
 Thumbs.db
+dist/
+*.docx
+.~*
+~$*
 *.log

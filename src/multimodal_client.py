@@ -32,9 +32,10 @@ class BridgeUnavailable(RuntimeError):
 class BridgeError(RuntimeError):
     """桥接服务可达，但本次请求失败（返回了错误 JSON 或非预期状态码）。"""
 
-    def __init__(self, status: int, message: str) -> None:
+    def __init__(self, status: int, message: str, trace_id: str = "") -> None:
         super().__init__(message)
         self.status = status
+        self.trace_id = trace_id
 
 
 def default_config() -> dict[str, Any]:
@@ -65,12 +66,16 @@ class MultimodalClient:
     # ---------------------------------------------------------------- HTTP
     def _request(self, path: str, *, data: bytes | None = None,
                  content_type: str = "application/json",
-                 timeout: float = 10.0, method: str | None = None):
+                 timeout: float = 10.0, method: str | None = None,
+                 trace_id: str | None = None):
         """发一个请求；网络层异常统一转成 :class:`BridgeUnavailable`。"""
+        headers = {"Content-Type": content_type} if data is not None else {}
+        if trace_id:
+            headers["X-Trace-ID"] = str(trace_id)
         request = urllib.request.Request(
             f"{self.base_url}{path}",
             data=data,
-            headers={"Content-Type": content_type} if data is not None else {},
+            headers=headers,
             method=method or ("POST" if data is not None else "GET"),
         )
         try:
@@ -82,16 +87,21 @@ class MultimodalClient:
                 detail = json.loads(exc.read().decode("utf-8")).get("error", "")
             except Exception:  # noqa: BLE001
                 detail = ""
-            raise BridgeError(exc.code, detail or f"桥接服务返回 {exc.code}") from exc
+            raise BridgeError(
+                exc.code, detail or f"桥接服务返回 {exc.code}", str(trace_id or "")
+            ) from exc
         except (urllib.error.URLError, OSError, TimeoutError) as exc:
             raise BridgeUnavailable(
                 f"无法连接多模态桥接服务 {self.base_url}（{exc}）"
             ) from exc
 
     def _request_json(self, path: str, payload: dict | None = None,
-                      timeout: float = 10.0, method: str | None = None) -> dict:
+                      timeout: float = 10.0, method: str | None = None,
+                      trace_id: str | None = None) -> dict:
         body = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        with self._request(path, data=body, timeout=timeout, method=method) as response:
+        with self._request(
+            path, data=body, timeout=timeout, method=method, trace_id=trace_id
+        ) as response:
             raw = response.read().decode("utf-8")
         try:
             data = json.loads(raw)
@@ -164,7 +174,7 @@ class MultimodalClient:
         return str(status.get("reason", "不可用"))
 
     # ----------------------------------------------------------- 各能力
-    def transcribe(self, wav_bytes: bytes) -> dict[str, Any]:
+    def transcribe(self, wav_bytes: bytes, trace_id: str | None = None) -> dict[str, Any]:
         """语音识别：WAV 字节 → ``{"text", "elapsed_ms", ...}``。
 
         语种由桥接服务侧的 ``ASR_CONFIG["language"]`` 决定（默认中文），
@@ -173,25 +183,26 @@ class MultimodalClient:
         if not wav_bytes:
             raise BridgeError(400, "音频内容为空")
         with self._request("/asr", data=wav_bytes, content_type="audio/wav",
-                           timeout=self.timeout_asr) as response:
+                           timeout=self.timeout_asr, trace_id=trace_id) as response:
             data = json.loads(response.read().decode("utf-8"))
         if not isinstance(data, dict):
             raise BridgeError(502, "ASR 返回格式异常")
         return data
 
-    def gesture(self, image_bytes: bytes) -> dict[str, Any]:
+    def gesture(self, image_bytes: bytes, trace_id: str | None = None) -> dict[str, Any]:
         """单帧手势识别：JPEG 字节 → ``{"gesture", "label", "hands"}``。"""
         if not image_bytes:
             raise BridgeError(400, "图像内容为空")
         with self._request("/gesture", data=image_bytes, content_type="image/jpeg",
-                           timeout=self.timeout_gesture) as response:
+                           timeout=self.timeout_gesture, trace_id=trace_id) as response:
             data = json.loads(response.read().decode("utf-8"))
         if not isinstance(data, dict):
             raise BridgeError(502, "手势接口返回格式异常")
         return data
 
     def vision(self, image_bytes: bytes,
-               categories: list[str] | None = None) -> dict[str, Any]:
+               categories: list[str] | None = None,
+               trace_id: str | None = None) -> dict[str, Any]:
         """图片推荐线索：JPEG/PNG 字节 → 结构化场景、物体与类目。"""
         if not image_bytes:
             raise BridgeError(400, "图片内容为空")
@@ -200,22 +211,25 @@ class MultimodalClient:
             "categories": [str(c) for c in (categories or [])],
         }
         data = self._request_json(
-            "/vision", payload, timeout=self.timeout_vision)
+            "/vision", payload, timeout=self.timeout_vision, trace_id=trace_id)
         if not isinstance(data.get("category_hints", []), list):
             raise BridgeError(502, "视觉接口返回的 category_hints 格式异常")
         return data
 
-    def tts(self, text: str) -> bytes:
+    def tts(self, text: str, trace_id: str | None = None) -> bytes:
         """语音合成：文本 → MP3 字节。"""
         text = (text or "").strip()
         if not text:
             raise BridgeError(400, "text 不能为空")
         body = json.dumps({"text": text}, ensure_ascii=False).encode("utf-8")
-        with self._request("/tts", data=body, timeout=self.timeout_tts) as response:
+        with self._request(
+            "/tts", data=body, timeout=self.timeout_tts, trace_id=trace_id
+        ) as response:
             return response.read()
 
     def chat(self, messages: list[dict], model: str | None = None,
-             temperature: float = 0.2, max_tokens: int | None = None) -> dict[str, Any]:
+             temperature: float = 0.2, max_tokens: int | None = None,
+             trace_id: str | None = None) -> dict[str, Any]:
         """本地大模型对话：``{"content", "model", "elapsed_ms"}``。"""
         if not messages:
             raise BridgeError(400, "messages 不能为空")
@@ -224,7 +238,9 @@ class MultimodalClient:
             payload["model"] = model
         if max_tokens:
             payload["max_tokens"] = int(max_tokens)
-        return self._request_json("/llm", payload, timeout=self.timeout_llm)
+        return self._request_json(
+            "/llm", payload, timeout=self.timeout_llm, trace_id=trace_id
+        )
 
 
 _DEFAULT_CLIENT: MultimodalClient | None = None

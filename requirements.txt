@@ -5,5 +5,7 @@ gensim>=4.3
 flask>=2.3
 matplotlib>=3.7
 lightgbm>=3.3
+# 阶段验收测试
+pytest>=7.0
 # 可选：向量库（阶段三可用暴力余弦替代）
 # chromadb>=0.4

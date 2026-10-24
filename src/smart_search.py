@@ -485,6 +485,7 @@ class SmartSearch:
         username: str | None = None,
         top_n: int | None = None,
         force_llm: bool = False,
+        feedback_map: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         """执行一次智能推荐查询。
 
@@ -592,10 +593,18 @@ class SmartSearch:
                 )
 
         # --- 反馈 ---
-        feedback_map: dict[str, str] = {}
-        if username:
-            feedback_map = fb.get_feedback(PATHS["feedback_db"], username)
-        liked, disliked = fb.split_feedback(feedback_map)
+        # 编排器会传入“持久点赞 + 当前会话反馈”的合并结果；旧调用仍从用户级
+        # SQLite 读取，以保持现有页面和脚本兼容。
+        effective_feedback: dict[str, str] = {}
+        if feedback_map is not None:
+            effective_feedback = {
+                str(item): str(action)
+                for item, action in feedback_map.items()
+                if str(action) in fb.ACTIONS
+            }
+        elif username:
+            effective_feedback = fb.get_feedback(PATHS["feedback_db"], username)
+        liked, disliked = fb.split_feedback(effective_feedback)
         disliked_set = set(disliked)
 
         # --- 基础用户向量（来自阶段四的关联客户） ---
@@ -632,7 +641,7 @@ class SmartSearch:
             w_sim = float(self.weights.get("similarity", 0.55)) * float(row.sim_score)
             w_pop = float(self.weights.get("popularity", 0.30)) * float(row.pop_score)
             w_fb = float(self.weights.get("feedback", 0.15)) * float(row.fb_score)
-            if feedback_map.get(row.item_id) == "like":
+            if effective_feedback.get(row.item_id) == "like":
                 reason_key = "liked"
             else:
                 reason_key = self._reason_key(
@@ -651,7 +660,7 @@ class SmartSearch:
                     "sim_score": round(float(row.sim_score), 4),
                     "pop_score": round(float(row.pop_score), 4),
                     "fb_score": round(float(row.fb_score), 4),
-                    "feedback": feedback_map.get(row.item_id, ""),
+                    "feedback": effective_feedback.get(row.item_id, ""),
                 }
             )
 

@@ -619,7 +619,7 @@
           </div>
         </div>
         <div class="result-tools">
-          <span class="muted">点击任意一行可设为手势目标</span>
+          <span class="muted">点击任意一行可设为手势目标，并记录本会话浏览</span>
           <button type="button" class="btn-ghost" id="tts-btn"
                   title="用项目二的 edge-tts 把当前页推荐结果念出来">
             <svg class="ico" aria-hidden="true"><use href="#i-microphone"></use></svg>
@@ -648,6 +648,9 @@
               <div class="rmeta">
                 <span class="tag">{{ r.category }}</span>
                 <span>{{ r.item_id }}</span>
+                {% if r.recall_sources %}
+                  <span title="多路召回来源">{{ r.recall_sources | join(' + ') }}</span>
+                {% endif %}
               </div>
             </div>
             <div class="rprice">¥{{ "%.2f"|format(r.price) }}</div>
@@ -696,14 +699,14 @@
       {% endif %}
 
       <div class="muted" style="margin-top:18px">
-        点赞会让该商品及其相似商品在下次排序中靠前；点踩会把它从结果中剔除。
+        点赞会作为长期偏好；点踩和继续浏览只在当前会话生效，不影响新的会话。
       </div>
     </div>
   {% elif result %}
     <div class="card">
       <div class="card-title">没有符合条件的商品</div>
       <div class="muted" style="margin-top:6px">
-        试试放宽价格区间，或换一个品类词再查一次。
+        {{ result.question or "试试放宽价格区间，或换一个品类词再查一次。" }}
       </div>
     </div>
   {% else %}
@@ -914,7 +917,14 @@
   }
   var cards = document.querySelectorAll(".rrow");
   cards.forEach(function (c) {
-    c.addEventListener("click", function () { setTarget(c.dataset.item, c.dataset.name); });
+    c.addEventListener("click", function () {
+      setTarget(c.dataset.item, c.dataset.name);
+      fetch("/api/browse", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ item_id: c.dataset.item }),
+      }).catch(function () {});
+    });
   });
   if (cards.length) setTarget(cards[0].dataset.item, cards[0].dataset.name);
 
