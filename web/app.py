@@ -7,6 +7,7 @@
     GET  /home                推荐首页（顶部滚动推荐 + 购买相似 + 当月档期；登录后个性化）
     GET  /                    相似商品查询（阶段三能力，公开）
     GET  /search              智能推荐（需登录；支持"100块以内的家居装饰"这类中文查询）
+    GET  /admin               用户洞察（需管理员；查看画像、购买记录与反馈）
     GET  /login  /logout      登录 / 注册 / 登出
 
 接口：
@@ -22,6 +23,7 @@
     POST /api/gesture                  本地手势识别（JPEG，需登录）
     POST /api/vision/analyze           图片视觉线索（multipart，需登录）
     POST /api/tts                      edge-tts 语音播报（JSON，需登录）
+    GET  /admin/users/<name>/purchases.csv  导出用户购买记录（需管理员）
 
 安全说明：
     1. 密码用 PBKDF2 加盐哈希存储，数据库不存明文（见 src/user_store.py）；
@@ -31,6 +33,8 @@
 from __future__ import annotations
 
 import functools
+import csv
+import io
 import json
 import math
 import os
@@ -46,6 +50,7 @@ sys.path.insert(0, str(ROOT))
 import pandas as pd
 from flask import (
     Flask,
+    abort,
     g,
     jsonify,
     make_response,
@@ -58,6 +63,7 @@ from flask import (
 
 from config.settings import HYPERPARAMS, PATHS
 from src import feedback as fb
+from src.admin_dashboard import build_user_insight
 from src import home_recommend as hr
 from src import item2vec as i2v
 from src import multimodal_client as mmc
@@ -382,6 +388,7 @@ def nav(active: str = "") -> dict:
     return {
         "username": user["username"] if user else "",
         "display_name": user["display_name"] if user else "",
+        "is_admin": bool(user and user.get("role") == "admin"),
         "active": active,
     }
 
@@ -439,6 +446,22 @@ def api_login_required(view):
     def wrapper(*args, **kwargs):
         if not session.get("username"):
             return api_error("请先登录", 401, error_code="AUTH_REQUIRED")
+        return view(*args, **kwargs)
+
+    return wrapper
+
+
+def admin_required(view):
+    """管理员页面：未登录跳转登录，普通用户明确拒绝。"""
+
+    @functools.wraps(view)
+    def wrapper(*args, **kwargs):
+        if not session.get("username"):
+            target = request.full_path.rstrip("?")
+            return redirect(url_for("login", next=target))
+        user = current_user()
+        if not user or user.get("role") != "admin":
+            abort(403)
         return view(*args, **kwargs)
 
     return wrapper
@@ -645,6 +668,145 @@ def api_home():
     if data is None:
         return jsonify({"error": "首页推荐未就绪", "detail": error}), 503
     return jsonify(data)
+
+
+# ------------------------------------------------------------ 管理员后台
+def _decorate_admin_insight(insight: dict) -> None:
+    """补充图片和展示所需的商品标题，不改变原始购买记录。"""
+    for row in insight["purchases"]:
+        row["image"] = image_url(row["item_id"], row.get("category", ""))
+    for row in insight["feedback"]:
+        row["image"] = image_url(row["item_id"], row.get("category", ""))
+
+
+@app.get("/admin")
+@admin_required
+def admin_page():
+    """管理员只读工作台：用户目录、画像、购买记录与反馈概览。"""
+    all_users = user_store.list_users(PATHS["user_db"])
+    query = (request.args.get("q") or "").strip()
+    filtered_users = user_store.list_users(PATHS["user_db"], query=query)
+
+    rec = ensure_home()
+    feedback_rows = {
+        user["username"]: fb.list_feedback(PATHS["feedback_db"], user["username"])
+        for user in all_users
+    }
+    for user in all_users:
+        records = feedback_rows[user["username"]]
+        user["purchase_count"] = (
+            rec.history.count(user["customer_id"])
+            if rec and user["customer_id"]
+            else 0
+        )
+        user["likes"] = sum(1 for row in records if row["action"] == "like")
+        user["dislikes"] = sum(1 for row in records if row["action"] == "dislike")
+
+    user_map = {user["username"]: user for user in all_users}
+    filtered_users = [
+        user_map.get(user["username"], user) for user in filtered_users
+    ]
+    requested_username = (request.args.get("user") or "").strip()
+    selected_user = user_map.get(requested_username) if requested_username else None
+    if selected_user is None and filtered_users:
+        selected_user = filtered_users[0]
+
+    selected_insight = None
+    if selected_user is not None:
+        selected_insight = build_user_insight(
+            selected_user,
+            rec.history if rec else None,
+            PROFILE_INDEX,
+            feedback_rows.get(selected_user["username"], []),
+        )
+        _decorate_admin_insight(selected_insight)
+        customer_id = selected_user["customer_id"]
+        selected_insight["vector_ready"] = bool(
+            SEARCHER and customer_id and customer_id in SEARCHER.user_vectors
+        )
+        selected_insight["linked"] = bool(customer_id)
+        selected_insight["history_error"] = HOME_ERROR if rec is None else ""
+
+    all_feedback = [
+        record for records in feedback_rows.values() for record in records
+    ]
+    history_stats = rec.history.stats() if rec else {}
+    dashboard = {
+        "users": len(all_users),
+        "admins": sum(1 for user in all_users if user["role"] == "admin"),
+        "linked_users": sum(1 for user in all_users if user["customer_id"]),
+        "feedback": len(all_feedback),
+        "likes": sum(1 for row in all_feedback if row["action"] == "like"),
+        "dislikes": sum(1 for row in all_feedback if row["action"] == "dislike"),
+        "purchase_customers": int(history_stats.get("customers", 0)),
+    }
+    return render_template(
+        "admin.html",
+        **nav("admin"),
+        dashboard=dashboard,
+        users=all_users,
+        filtered_users=filtered_users,
+        selected_user=selected_user,
+        insight=selected_insight,
+        query=query,
+        home_error=HOME_ERROR,
+    )
+
+
+@app.get("/admin/users/<username>/purchases.csv")
+@admin_required
+def admin_export_purchases(username: str):
+    """导出指定用户的完整购买记录，供本地核查。"""
+    user = user_store.get_user(PATHS["user_db"], username)
+    if user is None:
+        abort(404)
+
+    rec = ensure_home()
+    insight = build_user_insight(
+        user,
+        rec.history if rec else None,
+        PROFILE_INDEX,
+        [],
+    )
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(
+        [
+            "username",
+            "customer_id",
+            "item_id",
+            "name",
+            "category",
+            "reference_price",
+            "orders",
+            "qty",
+            "first_purchase",
+            "last_purchase",
+        ]
+    )
+    for row in insight["purchases"]:
+        writer.writerow(
+            [
+                user["username"],
+                user["customer_id"],
+                row["item_id"],
+                row["name"],
+                row["category"],
+                "" if row["price"] is None else f"{row['price']:.2f}",
+                row["orders"],
+                row["qty"],
+                row["first_date"],
+                row["last_date"],
+            ]
+        )
+
+    response = make_response("\ufeff" + output.getvalue())
+    response.headers["Content-Type"] = "text/csv; charset=utf-8"
+    filename = f"{user['username']}-购买记录.csv"
+    response.headers["Content-Disposition"] = (
+        f"attachment; filename*=UTF-8''{quote(filename)}"
+    )
+    return response
 
 
 # ------------------------------------------------------------ 智能推荐
@@ -1295,7 +1457,7 @@ def handle_404(_):
                 "error_code": "NOT_FOUND",
                 "trace_id": trace_id(),
                 "hint": (
-                    "可用页面/接口：/home 、/ 、/search 、/login 、/health 、/similar 、"
+                    "可用页面/接口：/home 、/ 、/search 、/admin 、/login 、/health 、/similar 、"
                     "/api/home 、/api/items 、/api/search 、/api/disliked 、/feedback 、"
                     "/feedback/clear 、/api/multimodal/status 、/api/voice 、"
                     "/api/gesture 、/api/vision/analyze 、/api/tts"

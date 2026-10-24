@@ -440,6 +440,9 @@
       <a href="/home" class="navlink {% if active=='home' %}active{% endif %}">推荐首页</a>
       <a href="/search" class="navlink {% if active=='search' %}active{% endif %}">智能推荐</a>
       <a href="/" class="navlink {% if active=='similar' %}active{% endif %}">相似商品</a>
+      {% if is_admin %}
+        <a href="/admin" class="navlink {% if active=='admin' %}active{% endif %}">用户洞察</a>
+      {% endif %}
       <span class="spacer"></span>
       {% if username %}
         <span class="who-line"><span class="who">{{ display_name or username }}</span></span>

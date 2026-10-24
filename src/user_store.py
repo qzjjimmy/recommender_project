@@ -20,6 +20,7 @@ from typing import Any
 PBKDF2_ROUNDS = 200_000
 USERNAME_RE = re.compile(r"^[\w\u4e00-\u9fa5]{3,20}$")
 MIN_PASSWORD_LEN = 6
+USER_ROLES = ("user", "admin")
 
 
 # ------------------------------------------------------------------ 基础
@@ -44,10 +45,20 @@ def init_db(db_path: Path) -> None:
                 salt         TEXT    NOT NULL,
                 password     TEXT    NOT NULL,
                 customer_id  TEXT    NOT NULL DEFAULT '',
+                role         TEXT    NOT NULL DEFAULT 'user',
                 created_at   TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
             )
             """
         )
+        # 旧数据库平滑升级：CREATE TABLE IF NOT EXISTS 不会补齐新列。
+        columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(users)").fetchall()
+        }
+        if "role" not in columns:
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'"
+            )
         conn.commit()
 
 
@@ -139,11 +150,69 @@ def count_users(db_path: Path) -> int:
         return int(conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"])
 
 
+def list_users(
+    db_path: Path,
+    *,
+    query: str = "",
+    role: str | None = None,
+) -> list[dict[str, Any]]:
+    """列出用户，供管理员目录检索；不返回密码或盐。"""
+    if role is not None and role not in USER_ROLES:
+        raise ValueError(f"role 必须是 {USER_ROLES} 之一")
+
+    sql = (
+        "SELECT id, username, display_name, customer_id, role, created_at "
+        "FROM users"
+    )
+    clauses: list[str] = []
+    params: list[Any] = []
+    text = str(query or "").strip()
+    if text:
+        clauses.append(
+            "(username LIKE ? OR display_name LIKE ? OR customer_id LIKE ?)"
+        )
+        pattern = f"%{text}%"
+        params.extend([pattern, pattern, pattern])
+    if role is not None:
+        clauses.append("role = ?")
+        params.append(role)
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY CASE role WHEN 'admin' THEN 0 ELSE 1 END, created_at DESC, id DESC"
+
+    with get_connection(db_path) as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [_row_to_user(row) for row in rows]
+
+
+def set_role(db_path: Path, username: str, role: str) -> bool:
+    """授予或撤销管理员角色；用户不存在时返回 ``False``。"""
+    if role not in USER_ROLES:
+        raise ValueError(f"role 必须是 {USER_ROLES} 之一")
+    with get_connection(db_path) as conn:
+        cursor = conn.execute(
+            "UPDATE users SET role = ? WHERE username = ?",
+            (role, str(username)),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def count_admins(db_path: Path) -> int:
+    """当前管理员账号数。"""
+    with get_connection(db_path) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM users WHERE role = 'admin'"
+        ).fetchone()
+    return int(row["n"])
+
+
 def _row_to_user(row: sqlite3.Row) -> dict[str, Any]:
     return {
         "id": int(row["id"]),
         "username": str(row["username"]),
         "display_name": str(row["display_name"]),
         "customer_id": str(row["customer_id"] or ""),
+        "role": str(row["role"] or "user"),
         "created_at": str(row["created_at"]),
     }
